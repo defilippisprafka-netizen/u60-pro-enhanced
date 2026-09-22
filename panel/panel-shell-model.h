@@ -7,7 +7,10 @@ struct panel_shell {
  cJSON *snapshot; /* root owns; UI only reads. */
  int tab, subpage, item_page, choice_page, field_page, menu_page;
  cJSON *report_lines; /* transient text only; never persisted */
- int report_page;
+ int report_page; /* page fields now store pixel offsets, not page numbers */
+ int *scroll_offset, scroll_max, scroll_top, scroll_bottom;
+ int drag_active, drag_moved, drag_x, drag_y, drag_last_y, drag_hit, drag_scroll;
+ int menu_offsets[5];
  int busy;
  long status_until; /* worker activity; root updates, UI displays and blocks duplicate submits */
  char status[160]; /* optional root operation result/status */

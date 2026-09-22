@@ -3,7 +3,7 @@
 import hashlib,importlib.util,pathlib,shutil,tarfile
 R=pathlib.Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('prepare',R/'scripts/prepare.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
-VERSION='v0.1.1-experimental';out=R/'dist'/('u60-pro-enhanced-'+VERSION)
+VERSION='v0.1.2-dev';out=R/'dist'/('u60-pro-enhanced-'+VERSION)
 if out.exists():raise SystemExit('Release directory exists; inspect it before rebuilding')
 out.mkdir(parents=True)
 for n in ['prepare.py']:shutil.copyfile(R/'scripts'/n,out/n)
@@ -35,7 +35,7 @@ for local,remote in [('usb-isolate','u60-usb-isolate'),('usb-role','u60-usb-role
  shutil.copyfile(R/'panel'/(local+'-init.sh'),p/'init'/remote);(p/'init'/remote).chmod(0o700)
 shutil.copyfile(R/'scripts/portable/portable-boot.sh',p/'boot/portable-boot.sh')
 for n in ['check-device.sh','install-new-device.sh','restore-boot.sh','deploy-from-computer.py']:shutil.copyfile(R/'scripts/portable'/n,i/n)
-shutil.copyfile(R/'packaging/FACTORY-SHA256SUMS',i/'FACTORY-SHA256SUMS');(i/'RELEASE-ID').write_text('u60-pro-B28-20260922-140000\n')
+shutil.copyfile(R/'packaging/FACTORY-SHA256SUMS',i/'FACTORY-SHA256SUMS');(i/'RELEASE-ID').write_text('u60-pro-B28-20260922-193000\n')
 m.manifest(out);m.verify(out)
 archive=out.parent/(out.name+'.tar.gz')
 with tarfile.open(archive,'w:gz') as tar:

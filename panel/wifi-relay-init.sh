@@ -7,7 +7,7 @@ start_service() {
  procd_open_instance
  procd_set_param command /data/u60-panel/wifi-relay.sh watch
  procd_set_param respawn 3600 5 5
- procd_set_param term_timeout 8
+ procd_set_param term_timeout 20
  procd_set_param stdout 0
  procd_set_param stderr 0
  procd_close_instance

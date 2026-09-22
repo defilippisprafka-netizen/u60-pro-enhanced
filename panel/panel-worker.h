@@ -17,7 +17,7 @@ static int worker_start(const cJSON *request,int action) {
  close(in[0]);close(out[1]);size_t n=strlen(wire),at=0;
  while(at<n){ssize_t w=write(in[1],wire+at,n-at);if(w<0&&errno==EINTR)continue;if(w<=0)break;at+=(size_t)w;}
  memset(wire,0,n);free(wire);close(in[1]);fcntl(out[0],F_SETFL,O_NONBLOCK);
- pw.pid=p;pw.fd=out[0];pw.action=action;pw.started=now_ms();const cJSON*cv=cJSON_GetObjectItemCaseSensitive(request,"action");const char*command=cJSON_IsString(cv)?cv->valuestring:"";pw.timeout=action&&!strncmp(command,"wifi.relay.",11)?55000:action&&(!strcmp(command,"wifi.power")||!strcmp(command,"wifi.ap"))?105000:action&&!strcmp(command,"network.tailscale_mode")?75000:45000;pw.buf=malloc(WORKER_CAP+1);pw.used=0;
+ pw.pid=p;pw.fd=out[0];pw.action=action;pw.started=now_ms();const cJSON*cv=cJSON_GetObjectItemCaseSensitive(request,"action");const char*command=cJSON_IsString(cv)?cv->valuestring:"";pw.timeout=action&&!strncmp(command,"wifi.relay.",11)?120000:action&&(!strcmp(command,"wifi.power")||!strcmp(command,"wifi.ap"))?105000:action&&!strcmp(command,"network.tailscale_mode")?75000:45000;pw.buf=malloc(WORKER_CAP+1);pw.used=0;
  if(!pw.buf||at<n){worker_clear(1);return 0;}return 1;
 }
 static void live_num(cJSON *o,const char*k,double value){cJSON_DeleteItemFromObjectCaseSensitive(o,k);cJSON_AddNumberToObject(o,k,value);}
@@ -67,7 +67,19 @@ static int worker_poll(struct app *a){
   if(now_ms()-pw.started>pw.timeout)fail=1;
   if(eof||fail){pw.buf[pw.used]=0;cJSON*r=!fail?cJSON_Parse(pw.buf):NULL;
    if(pw.action){a->shell.busy=0;a->shell.status_until=now_ms()+8000;snprintf(a->shell.status,sizeof(a->shell.status),"%s",r&&jstr(r,"message")[0]?jstr(r,"message"):"操作超时或结果未知，请刷新核对");next_snapshot=0;if(r&&cJSON_IsObject(cJSON_GetObjectItem(r,"picker")))sh_open_item(a,cJSON_GetObjectItem(r,"picker"));else if(r&&cJSON_IsObject(cJSON_GetObjectItem(r,"report")))sh_show_report(a,cJSON_GetObjectItem(r,"report"));}
-   else if(r&&cJSON_IsObject(cJSON_GetObjectItem(r,"data"))&&cJSON_IsArray(cJSON_GetObjectItem(r,"sections"))){cJSON_Delete(a->shell.snapshot);a->shell.snapshot=r;r=NULL;append_screen_controls(a);}
+   else if(r&&cJSON_IsObject(cJSON_GetObjectItem(r,"data"))&&cJSON_IsArray(cJSON_GetObjectItem(r,"sections"))){
+    /* The slow service snapshot does not sample the physical route. Preserve
+     * fields owned by sample_local until its next tick; otherwise every refresh
+     * briefly loses the relay interface and renders the cellular operator.
+     * A real route change still overwrites these fields on the next local tick. */
+    cJSON*old=cJSON_GetObjectItem(a->shell.snapshot,"data"),*fresh=cJSON_GetObjectItem(r,"data");
+    const char*keys[]={"physical_iface","download_bps","upload_bps","cpu_percent","memory_percent","uptime_seconds"};
+    for(size_t k=0;k<sizeof(keys)/sizeof(keys[0]);k++){
+     const cJSON*v=cJSON_GetObjectItem(old,keys[k]);cJSON*copy=v?cJSON_Duplicate(v,1):NULL;
+     if(copy){cJSON_DeleteItemFromObject(fresh,keys[k]);cJSON_AddItemToObject(fresh,keys[k],copy);}
+    }
+    cJSON_Delete(a->shell.snapshot);a->shell.snapshot=r;r=NULL;append_screen_controls(a);
+   }
    else {snprintf(a->shell.status,sizeof(a->shell.status),"状态读取失败，保留上次结果");a->shell.status_until=now_ms()+8000;}
    cJSON_Delete(r);worker_clear(fail);changed=1;
   }

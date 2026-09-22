@@ -657,13 +657,14 @@ static void fill(struct drm_buf *b, uint16_t c)
 			row[x] = c;
 	}
 }
+static int draw_clip_top=0, draw_clip_bottom=H;
 static void fill_rect(struct drm_buf *b, int x0, int y0, int x1, int y1, uint16_t c)
 {
 	int x, y;
 	if (x0 < 0) x0 = 0;
-	if (y0 < 0) y0 = 0;
+	if (y0 < draw_clip_top) y0 = draw_clip_top;
 	if (x1 > W) x1 = W;
-	if (y1 > H) y1 = H;
+	if (y1 > draw_clip_bottom) y1 = draw_clip_bottom;
 	for (y = y0; y < y1; y++) {
 		uint16_t *row = (uint16_t *)((uint8_t *)b->map + y * b->pitch);
 		for (x = x0; x < x1; x++)
@@ -704,7 +705,7 @@ static void fill_circle(struct drm_buf *b, int cx, int cy, int rad, uint16_t c)
 			continue;
 		dx = (int)sqrtf((float)(rad * rad - y * y));
 		yy = cy + y;
-		if (yy < 0 || yy >= H)
+		if (yy < draw_clip_top || yy >= draw_clip_bottom)
 			continue;
 		row = (uint16_t *)((uint8_t *)b->map + yy * b->pitch);
 		x0 = cx - dx;
@@ -770,7 +771,7 @@ static void blend_glyph(struct drm_buf *b, int x, int y, int gw, int gh, unsigne
 	int fr = (fg >> 11) & 0x1f, gg = (fg >> 5) & 0x3f, fb = fg & 0x1f;
 	for (j = 0; j < gh; j++) {
 		int yy = y + j;
-		if (yy < 0 || yy >= H)
+		if (yy < draw_clip_top || yy >= draw_clip_bottom)
 			continue;
 		uint16_t *row = (uint16_t *)((uint8_t *)b->map + yy * b->pitch);
 		for (i = 0; i < gw; i++) {
@@ -929,7 +930,10 @@ static void touch_poll(struct touch_dev *t)
 	struct input_event ev;
 	t->tap = 0;
 	while (read(t->fd, &ev, sizeof(ev)) == sizeof(ev)) {
+		if(ev.type==EV_SYN && ev.code==SYN_REPORT)break; /* process each contact frame, including fast swipes */
 		if (ev.type == EV_ABS) {
+            if(ev.code==ABS_MT_SLOT){t->cur_slot=ev.value;continue;}
+            if(t->cur_slot!=0)continue;
 			if (ev.code == ABS_MT_POSITION_X || ev.code == ABS_X)
 				t->last_x = ev.value;
 			if (ev.code == ABS_MT_POSITION_Y || ev.code == ABS_Y)
@@ -1256,6 +1260,9 @@ static void hb(void)
 static void hit_reset(struct app *a) { a->nhits = 0; }
 static void hit_add(struct app *a, int x0, int y0, int x1, int y1, int id)
 {
+	if(y0<draw_clip_top)y0=draw_clip_top;
+ if(y1>draw_clip_bottom)y1=draw_clip_bottom;
+ if(y1<=y0||x1<=x0)return;
 	if (a->nhits >= MAX_HITS)
 		return;
 	a->hits[a->nhits].x0 = x0;
@@ -2135,13 +2142,23 @@ static int ui_main(void) {
   if(g_wake){g_wake=0;last_input=now_ms();if(app.blanked)screen_unblank(&app);else screen_blank(&app);need=1;}
   if(g_power){g_power=0;last_input=now_ms();screen_unblank(&app);app.shell.power_open=1;logline("power menu opened");need=1;}
   if(was_blanked&&!app.blanked)next_snapshot=0;
-  struct pollfd p={touch.fd,POLLIN,0};poll(&p,1,app.blanked&&!screen_notice.pid?1000:30);touch_poll(&touch);
-  if(panel_touch_accept(&touch_gate,was_blanked||app.blanked,touch.down,touch.tap)){last_input=now_ms();int x,y;touch_map(&touch,&x,&y);int id=hit_find(&app,x,y);if(id>=0)shell_hit(&app,id);need=1;}
+  struct pollfd p={touch.fd,POLLIN,0};poll(&p,1,app.blanked&&!screen_notice.pid?1000:30);
+  /* Consume queued motion frames before drawing, avoiding a growing backlog
+   * when touch sampling is faster than the LCD commit rate. Stop at release
+   * so a subsequent tap sees fresh hit targets. */
+  for(int frames=0;frames<64;frames++){
+   touch_poll(&touch);
+   int blocked=was_blanked||app.blanked||touch_gate.blocked;
+   panel_touch_accept(&touch_gate,was_blanked||app.blanked,touch.down,touch.tap);
+   int x,y;touch_map(&touch,&x,&y);
+   if(blocked){app.shell.drag_active=0;}else{if(touch.down||touch.tap)last_input=now_ms();if(shell_pointer(&app,x,y,touch.down,touch.tap))need=1;}
+   if(!touch.down||poll(&p,1,0)<=0)break;
+  }
   touch.tap=0;
   int lcd_result=panel_lcd_notice_poll(&screen_notice,now_ms());
   if(lcd_result>0)logline("stock LCD notification applied: %s",screen_notice.applied?"on":"off");
   else if(lcd_result<0){logline("stock LCD notification failed; retry latest state");snprintf(app.shell.status,sizeof(app.shell.status),"屏幕唤醒通知未确认，正在重试");app.shell.status_until=now_ms()+4000;need=1;}
-  if(worker_poll(&app))need=1;
+  if(!touch.down&&worker_poll(&app))need=1;
   if(!snapshot_logged&&cJSON_GetArraySize(cJSON_GetObjectItem(app.shell.snapshot,"sections"))>0){snapshot_logged=1;logline("switch event=first-snapshot mono_ms=%ld startup_ms=%ld",now_ms(),now_ms()-startup);}
   long t=now_ms();if(!app.blanked&&t-last_sample>=1000){sample_local(&app);last_sample=t;need=1;}
   if(t-last_hb>=5000){hb();last_hb=t;}

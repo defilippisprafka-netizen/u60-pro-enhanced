@@ -19,11 +19,132 @@ ap_state() {
   exit "$result"
  ) | sed -n 's/^state=//p'
 }
+ap_control() {
+ (
+  interface=$1;shift
+  hostapd_cli -p /data/vendor/wifi/hostapd -i "$interface" "$@" 2>/dev/null & p=$!
+  (sleep 3;kill "$p" 2>/dev/null) 7>&- 8>&- 9>&- >/dev/null 2>&1 & timer=$!
+  wait "$p";r=$?;kill "$timer" 2>/dev/null || :;wait "$timer" 2>/dev/null || :;exit "$r"
+ )
+}
+radio_args() {
+ # freq, width code (0=20/40, 1=80, 2=160), secondary offset, center index.
+ case "$1:$2:$3:$4" in *[!0-9:-]*) return 1;; esac
+ frequency=$1;width=$2;offset=$3;center=$4
+ case "$width" in
+  0) bw=20;cf=$frequency;[ "$offset" = 0 ] || { bw=40;cf=$((frequency+offset*10)); };;
+  1) bw=80;cf=$((5000+center*5));;
+  2) bw=160;cf=$((5000+center*5));;
+  *) return 1;;
+ esac
+ [ "$offset" = -1 ] || [ "$offset" = 0 ] || [ "$offset" = 1 ] || return 1
+ [ "$frequency" -ge 2400 ] && [ "$frequency" -le 5900 ] && [ "$cf" -ge 2400 ] && [ "$cf" -le 5900 ] || return 1
+ extra='ht he eht';[ "$frequency" -lt 3000 ] || extra='ht vht he eht'
+ printf '%s\n' "5 $frequency bandwidth=$bw center_freq1=$cf sec_channel_offset=$offset $extra"
+}
+radio_geometry() {
+ printf '%s\n' "$1" | awk -F= '
+ $1=="freq" {f=$2} $1=="vht_oper_chwidth" {w=$2} $1=="secondary_channel" {o=$2} $1=="vht_oper_centr_freq_seg0_idx" {c=$2}
+ END {if(f)printf "%s %s %s %s\n",f,w?w:0,o?o:0,c?c:0}'
+}
+radio_driver_frequency() {
+ iw dev "$1" info 2>/dev/null | sed -n 's/.*(\([0-9][0-9]*\) MHz).*/\1/p' | head -1
+}
+radio_configure() (
+ interface=$1;shift
+ radio_args "$@" >/dev/null || exit 1
+ frequency=$1;width=$2;offset=$3;center=$4
+ channel=$(((frequency-5000)/5));[ "$frequency" -ge 3000 ] || channel=$(((frequency-2407)/5))
+ ht='[SHORT-GI-20]'
+ case "$offset" in 1) ht='[HT40+][SHORT-GI-20][SHORT-GI-40]';; -1) ht='[HT40-][SHORT-GI-20][SHORT-GI-40]';; esac
+ ac=1;[ "$frequency" -ge 3000 ] || ac=0
+ for pair in "channel $channel" 'ieee80211n 1' "ieee80211ac $ac" "ht_capab $ht" "vht_oper_chwidth $width" "vht_oper_centr_freq_seg0_idx $center" "he_oper_chwidth $width" "he_oper_centr_freq_seg0_idx $center" "eht_oper_chwidth $width" "eht_oper_centr_freq_seg0_idx $center";do
+  key=${pair%% *};value=${pair#* }
+  [ "$(ap_control "$interface" set "$key" "$value")" = OK ] || exit 1
+ done
+)
+radio_apply() (
+ interface=$1;shift
+ radio_args "$@" >/dev/null || exit 1
+ before=$(ap_control "$interface" status);original=$(radio_geometry "$before")
+ [ -n "$original" ] || exit 1
+ # B28 reports CSA completion before firmware completes it; subsequent key
+ # installation fails. Reconfigure a stopped BSS instead, without rewriting UCI.
+ [ "$(ap_control "$interface" disable)" = OK ] || exit 1
+ if ! radio_configure "$interface" "$@";then
+  radio_configure "$interface" $original || :
+  ap_control "$interface" enable >/dev/null
+  exit 1
+ fi
+ if [ "$(ap_control "$interface" enable)" != OK ];then
+  radio_configure "$interface" $original || :
+  ap_control "$interface" enable >/dev/null
+  exit 1
+ fi
+ tries=0
+ while [ "$tries" -lt 12 ];do
+  actual=$(ap_control "$interface" status)
+  state=$(printf '%s\n' "$actual" | sed -n 's/^state=//p')
+  freq=$(printf '%s\n' "$actual" | sed -n 's/^freq=//p')
+  driver=$(radio_driver_frequency "$interface")
+  [ "$state:$freq:$driver" != "ENABLED:$1:$1" ] || exit 0
+  tries=$((tries+1));sleep .25
+ done
+ exit 1
+)
+radio_lock() {
+ attempts=0
+ while ! flock -n 7;do attempts=$((attempts+1));[ "$attempts" -lt 20 ] || return 1;sleep .2;done
+}
+radio_align() (
+ f=${1:-};case "$f" in ''|*[!0-9]*) exit 1;; esac
+ if [ "$f" -ge 2412 ] && [ "$f" -le 2472 ] && [ "$(((f-2412)%5))" = 0 ];then
+  interface=wlan0;geometry="$f 0 0 0"
+ else
+  case "$f" in
+   5180|5200|5220|5240) center=42;;
+   5745|5765|5785|5805) center=155;;
+   5825) center=165;;
+   *) exit 1;;
+  esac
+  interface=wlan2
+  if [ "$f" = 5825 ];then geometry="$f 0 0 165";else
+   offset=1;case "$f" in 5200|5240|5765|5805) offset=-1;; esac
+   geometry="$f 1 $offset $center"
+  fi
+ fi
+ exec 7>/tmp/u60-wifi-band.action;radio_lock || exit 1
+ before=$(ap_control "$interface" status)
+ [ "$(printf '%s\n' "$before" | sed -n 's/^state=//p')" = ENABLED ] || exit 0
+ old=$(radio_geometry "$before");[ -n "$old" ] || exit 1
+ current=${old%% *};driver=$(radio_driver_frequency "$interface")
+ [ "$current:$driver" != "$f:$f" ] || exit 0
+ # Keep the first geometry so each retry doesn't overwrite the original.
+ snapshot="$RUN/radio-$interface"
+ if [ ! -f "$snapshot" ];then radio_args $old >/dev/null || exit 1;printf '%s\n' "$old" > "$snapshot";fi
+ radio_apply "$interface" $geometry
+)
+radio_restore() (
+ exec 7>/tmp/u60-wifi-band.action;radio_lock || exit 1
+ result=0
+ for interface in wlan0 wlan2;do
+  snapshot="$RUN/radio-$interface";[ -f "$snapshot" ] || continue
+  old=$(cat "$snapshot");case "$old" in ''|*[!0-9\ -]*) result=1;continue;; esac
+  before=$(ap_control "$interface" status)
+  if [ "$(printf '%s\n' "$before" | sed -n 's/^state=//p')" = ENABLED ];then
+   current=$(printf '%s\n' "$before" | sed -n 's/^freq=//p')
+   driver=$(radio_driver_frequency "$interface")
+   if [ "$current:$driver" != "${old%% *}:${old%% *}" ];then radio_apply "$interface" $old || { result=1;continue; };fi
+  fi
+  rm -f "$snapshot"
+ done
+ exit "$result"
+)
 allowed() {
  [ "$(cat "$ROOT/usb-role" 2>/dev/null)" = LAN ] &&
  [ "$(setting zwrt_router.network.opms_wan_mode)" = PPP ] &&
  [ "$(setting wireless.zte_mbb.wifi_onoff)" = 1 ] &&
- [ "$(ap_state wlan2)" = ENABLED ] && [ "$(ap_state wlan0)" != ENABLED ] &&
+ [ "$(ap_state wlan2)" = ENABLED ] &&
  [ "$(ap_state wlan1)" != ENABLED ] && [ "$(ap_state wlan3)" != ENABLED ]
 }
 prepare() {
@@ -46,7 +167,8 @@ prepare() {
   fi
   wpa_supplicant -B -D nl80211 -i u60sta -c "$PRIVATE/wpa.conf" -P "$RUN/supp.pid" -f /dev/null -qq >/dev/null 2>&1 || return 1
   n=0;while [ "$(wpa ping)" != PONG ];do n=$((n+1));[ "$n" -lt 20 ] || return 1;sleep .1;done
-  [ -f "$PRIVATE/enabled" ] || wpa disconnect >/dev/null
+  wpa disconnect >/dev/null
+  [ "$(wpa driver SETROAMMODE 1)" = OK ] || return 1
  fi
 }
 ipt() { iptables -w 2 "$@" >/dev/null 2>&1; }
@@ -95,7 +217,7 @@ stop_dhcp() {
  esac
  rm -f "$RUN/dhcp.pid"
 }
-cleanup() { rm -f "$RUN/enabled";stop_dhcp;withdraw;wpa terminate >/dev/null || :;[ ! -e /sys/class/net/u60sta ] || iw dev u60sta del;remove_rules;rm -f "$RUN/enabled"; }
+cleanup() { rm -f "$RUN/enabled";stop_dhcp;withdraw;wpa driver SETROAMMODE 0 >/dev/null || :;wpa terminate >/dev/null || :;[ ! -e /sys/class/net/u60sta ] || iw dev u60sta del;remove_rules;radio_restore || :;rm -f "$RUN/enabled"; }
 status() {
  enabled=false;[ ! -f "$PRIVATE/enabled" ] || enabled=true
  active=false
@@ -105,10 +227,20 @@ status() {
  [ "$enabled" = true ] || state=OFF
  [ "$active" != true ] || state=CONNECTED
  [ "$active:$state" != false:CONNECTED ] || state=CELLULAR
+ frequency=$(wpa status | sed -n "s/^freq=//p");case "$frequency" in ''|*[!0-9]*) frequency=0;; esac
  saved=false;if [ -s "$PRIVATE/wpa.conf" ] && grep -q '^network={' "$PRIVATE/wpa.conf";then saved=true;fi
- printf '{"ok":true,"enabled":%s,"active":%s,"saved":%s,"state":"%s","ipv6":"cellular_blocked_while_relay"}\n' "$enabled" "$active" "$saved" "$state"
+ printf '{"ok":true,"enabled":%s,"active":%s,"saved":%s,"state":"%s","frequency":%s,"ipv6":"cellular_blocked_while_relay"}\n' "$enabled" "$active" "$saved" "$state" "$frequency"
+}
+stop_watch() {
+ /etc/init.d/u60-wifi-relay stop >/dev/null 2>&1 || :
+ # procd stop returns before the previous shell finishes its cleanup.
+ # Wait for its actual ownership lock before touching radio/route resources.
+ exec 8>"$RUN/watch.lock"
+ n=0
+ while ! flock -n 8;do n=$((n+1));[ "$n" -lt 125 ] || return 1;sleep .2;done
 }
 case "${1:-}" in
+ align) radio_align "${2:-}";;
  rules) firewall;;
  status) status;;
  prepare) prepare;;
@@ -123,11 +255,13 @@ case "${1:-}" in
   /etc/init.d/u60-wifi-relay start;;
  off)
   rm -f "$PRIVATE/enabled" "$RUN/enabled"
-  /etc/init.d/u60-wifi-relay stop >/dev/null 2>&1 || :
+  stop_watch || exit 1
   cleanup;phase OFF;;
  watch)
   exec 8>"$RUN/watch.lock";flock -n 8 || exit 0
-  trap 'trap - INT TERM EXIT;cleanup;exit' INT TERM EXIT
+  coordinate_pid=''
+  finish() { trap - INT TERM HUP EXIT;[ -z "$coordinate_pid" ] || { kill "$coordinate_pid" 2>/dev/null || :;wait "$coordinate_pid" 2>/dev/null || :; };cleanup;exit; }
+  trap finish INT TERM HUP EXIT
   tick=0
   while [ -f "$PRIVATE/enabled" ];do
    if [ -f /tmp/u60-standby/asleep ];then sleep 2;continue;fi
@@ -136,7 +270,10 @@ case "${1:-}" in
    if ! allowed; then cleanup;phase POLICY;sleep 5;continue;fi
    if ! prepare;then cleanup;phase ERROR;sleep 5;continue;fi
    touch "$RUN/enabled"
-   if wpa status | grep -q '^wpa_state=COMPLETED$';then
+   station=$(wpa status)
+   if printf '%s\n' "$station" | grep -q '^wpa_state=COMPLETED$';then
+    frequency=$(printf '%s\n' "$station" | sed -n 's/^freq=//p')
+    if ! radio_align "$frequency";then stop_dhcp;withdraw;wpa disconnect >/dev/null;phase ERROR;sleep 5;continue;fi
     if [ ! -s "$RUN/dhcp.pid" ] || ! kill -0 "$(cat "$RUN/dhcp.pid")" 2>/dev/null;then
      phase CONNECTING
      U60_RELAY_IFINDEX=$(cat /sys/class/net/u60sta/ifindex);export U60_RELAY_IFINDEX
@@ -147,7 +284,12 @@ case "${1:-}" in
     if [ -f "$RUN/lease-ready" ];then
      tick=$((tick+1));if [ "$tick" -ge 5 ];then firewall || { withdraw;phase ERROR; };tick=0;fi
     fi
-   else stop_dhcp;withdraw;phase CELLULAR;fi
+   else
+    stop_dhcp;withdraw;phase CELLULAR
+    "$ROOT/panel-relay" coordinate >/dev/null 2>&1 8>&- & coordinate_pid=$!
+    if wait "$coordinate_pid";then coordinate_pid='';sleep 2
+    else coordinate_pid='';cleanup;phase CELLULAR;sleep 10;fi
+   fi
    sleep 2
   done;;
  *) exit 2;;

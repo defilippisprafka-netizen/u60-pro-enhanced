@@ -25,7 +25,7 @@ static const char *jstr(const cJSON *o,const char *k){cJSON *v=jget(o,k);return 
 static cJSON *reply(int ok,const char *msg){cJSON *r=cJSON_CreateObject();cJSON_AddBoolToObject(r,"ok",ok);cJSON_AddStringToObject(r,"message",msg);return r;}
 static long long ms(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return (long long)t.tv_sec*1000+t.tv_nsec/1000000;}
 static int run_cmd(const char *path,char *const argv[],const char *input,char *out,size_t cap){
- int in[2],op[2],status=0;size_t used=0,sent=0,total=input?strlen(input):0;pid_t pid;long long end=ms()+(!strcmp(path,"/data/u60-panel/panel-relay")?42000:!strcmp(path,"/data/u60-panel/wifi-band.sh")?95000:!strcmp(path,"/data/u60-panel/tailscale-mode.sh")?65000:((!strcmp(path,"/data/u60-panel/network-profile.sh")||!strcmp(path,"/data/u60-panel/tailscale-mode.sh")||!strcmp(path,"/data/u60-panel/wifi-band.sh"))?30000:8000));
+ int in[2],op[2],status=0;size_t used=0,sent=0,total=input?strlen(input):0;pid_t pid;long long end=ms()+(!strcmp(path,"/data/u60-panel/panel-relay")?110000:!strcmp(path,"/data/u60-panel/wifi-relay.sh")?60000:!strcmp(path,"/data/u60-panel/wifi-band.sh")?95000:!strcmp(path,"/data/u60-panel/tailscale-mode.sh")?65000:((!strcmp(path,"/data/u60-panel/network-profile.sh")||!strcmp(path,"/data/u60-panel/tailscale-mode.sh")||!strcmp(path,"/data/u60-panel/wifi-band.sh"))?30000:8000));
  if(!cap)return 0;if(out)out[0]=0;if(pipe(in))return 0;if(pipe(op)){close(in[0]);close(in[1]);return 0;}
  pid=fork();if(pid<0){close(in[0]);close(in[1]);close(op[0]);close(op[1]);return 0;}
  if(!pid){dup2(in[0],0);dup2(op[1],1);int nul=open("/dev/null",O_WRONLY);if(nul>=0)dup2(nul,2);close(in[0]);close(in[1]);close(op[0]);close(op[1]);if(nul>2)close(nul);char *env[]={"PATH=/usr/sbin:/usr/bin:/sbin:/bin","LANG=C",NULL};execve(path,argv,env);_exit(127);}
@@ -172,7 +172,7 @@ static cJSON *wifi_band(const char *command){if(fixture){if(!strcmp(command,"sta
 #include "panel-relay-control.h"
 static cJSON *wifi_action(const char *action,const cJSON *args){
  if(!strncmp(action,"wifi.relay.",11))return relay_action(action,args);
- if(relay_enabled()&&strcmp(action,"wifi.show_password")&&strcmp(action,"wifi.sleep")){
+ if(relay_enabled()&&strcmp(action,"wifi.show_password")&&strcmp(action,"wifi.sleep")&& !(!strcmp(action,"wifi.ap")&&!strcmp(jstr(args,"section"),"main_2g"))){
   int off=0;if(!strcmp(action,"wifi.power")&&boolarg(args,"enabled",&off)&&!off){cJSON*r=relay_run("off",NULL);int ok=cJSON_IsTrue(jget(r,"ok"));cJSON_Delete(r);if(!ok)return reply(0,"中继尚未退出，未关闭热点");}
   else return reply(0,"请先断开Wi-Fi中继，再修改热点设置");
  }

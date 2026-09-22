@@ -22,3 +22,5 @@
 项目修改包含：新的五页屏幕与控制层、Wi-Fi/USB/待机协调、原厂网页增强、Clash/Tailscale管理与公开安装流程。第三方头文件与库的原版权人信息是必须保留的许可证信息，不属于用户私人信息。
 
 原厂程序、字体、网页与硬件驱动归各自权利人所有。安装准备过程只在用户设备和本机生成派生网页覆盖层，公开仓库不携带这些原厂资源，不提供固件镜像。
+
+双频中继调研还参考了 [AOSP STA/AP 并发说明](https://source.android.com/docs/core/connect/wifi-sta-ap-concurrency)及 [公开 qcacld-3.0 驱动中 SETROAMMODE 的语义](https://android.googlesource.com/kernel/msm/+/abe8a675bdc0544db0480dce5e7589e6f50ee655/drivers/staging/qcacld-3.0/core/hdd/src/wlan_hdd_ioctl.c)。这些是架构/接口研究来源，不等于该公开驱动与 B28 固件完全一致；项目未复制或分发该驱动，最终兼容性以本机实测和验证边界为准。

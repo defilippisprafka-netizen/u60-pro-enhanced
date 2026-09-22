@@ -21,7 +21,7 @@ static const uint16_t sh_palettes[2][8]={
 enum { SH_BACK=2000,SH_REFRESH,SH_PREV,SH_NEXT,SH_CANCEL,SH_APPLY,SH_CONFIRM,
  SH_KEYMODE,SH_SHIFT,SH_DELETE,SH_SPACE,SH_DONE,SH_REVEAL,SH_FIELD_PREV,SH_FIELD_NEXT,
  SH_POWER_OFF,SH_POWER_REBOOT,SH_FACTORY,SH_SEARCH=2031,SH_SEARCH_CLEAR,SH_STATUS=2030,SH_TAB=2020,SH_SECTION=2040,
- SH_ITEM=2100,SH_CHOICE=2300,SH_FIELD=2500,SH_KEY=2600 };
+ SH_ITEM=10000,SH_CHOICE=20000,SH_FIELD=30000,SH_KEY=2600 };
 static cJSON *sh_get(cJSON *o,const char *k){return cJSON_GetObjectItemCaseSensitive(o,k);}
 static const char *sh_str(cJSON *o,const char *k,const char *fallback){cJSON *v=sh_get(o,k);return cJSON_IsString(v)&&v->valuestring[0]?v->valuestring:fallback;}
 static int sh_num(cJSON *o,const char *k,int fallback){cJSON *v=sh_get(o,k);return cJSON_IsNumber(v)?v->valueint:fallback;}
@@ -122,6 +122,20 @@ static void sh_units(double bytes,char*out,size_t n,int speed){
  const char*units[]={"B","KiB","MiB","GiB","TiB"};int u=0;while(bytes>=1024&&u<4){bytes/=1024;u++;}snprintf(out,n,bytes>=100?"%.0f %s%s":"%.1f %s%s",bytes,units[u],speed?"/s":"");
 }
 static void sh_metric(cJSON*data,const char*key,char*out,size_t n,int speed){cJSON*v=sh_get(data,key);if(cJSON_IsNumber(v)&&v->valuedouble>=0)sh_units(v->valuedouble,out,n,speed);else snprintf(out,n,"—");}
+/* A viewport clips pixels AND hit targets. Absolute indices keep actions stable
+ * when a row is partially visible; no paging controls or empty pager reserve. */
+static void sh_scroll_begin(struct app*a,int*offset,int height,int top,int bottom){
+ struct panel_shell*s=&a->shell;s->scroll_offset=offset;s->scroll_top=top;s->scroll_bottom=bottom;
+ s->scroll_max=height-(bottom-top);if(s->scroll_max<0)s->scroll_max=0;
+ if(*offset<0)*offset=0;if(*offset>s->scroll_max)*offset=s->scroll_max;
+ draw_clip_top=top;draw_clip_bottom=bottom;
+}
+static void sh_scroll_end(struct drm_buf*b,struct app*a){
+ struct panel_shell*s=&a->shell;draw_clip_top=0;draw_clip_bottom=H;
+ if(s->scroll_max>0){int h=s->scroll_bottom-s->scroll_top,len=h*h/(h+s->scroll_max);if(len<18)len=18;
+ int y=s->scroll_top+(*s->scroll_offset)*(h-len)/s->scroll_max;
+ fill_round(b,314,y,317,y+len,1,SH_MUTED);}
+}
 static void sh_row(struct drm_buf*b,struct app*a,int y,const char*title,const char*value,int id,int enabled,int group){
  fill_round(b,12,y,308,y+57,11,sh_category_card(group));
  int title_w=text_width(title,16),value_w=text_width(value,18);
@@ -198,7 +212,7 @@ static void sh_statusbar(struct drm_buf*b,struct app*a,time_t now){
 }
 static void sh_home(struct drm_buf*b,struct app*a){
  struct panel_shell*s=&a->shell;cJSON*d=sh_get(s->snapshot,"data"),*cl=sh_get(d,"clash");char tmp[160],down[40],up[40],today[40],month[40],quota[40],used[40];
- if(!strcmp(sh_str(d,"physical_iface",""),"u60sta"))snprintf(tmp,sizeof(tmp),"Wi-Fi 中继 · 5G 热点");else snprintf(tmp,sizeof(tmp),"%s · %s",sh_str(d,"operator",a->operator[0]?a->operator:"运营商未知"),sh_str(d,"network",a->net_type[0]?a->net_type:"网络未知"));sh_text(b,16,51,tmp,15,SH_CYAN,287);
+ if(!strcmp(sh_str(d,"physical_iface",""),"u60sta"))snprintf(tmp,sizeof(tmp),"%s",sh_str(d,"wifi_status","Wi-Fi 上游中继"));else snprintf(tmp,sizeof(tmp),"%s · %s",sh_str(d,"operator",a->operator[0]?a->operator:"运营商未知"),sh_str(d,"network",a->net_type[0]?a->net_type:"网络未知"));sh_text(b,16,51,tmp,15,SH_CYAN,287);
  const char*profile=sh_str(d,"network_profile","");const char*outlet=!strcmp(profile,"clash")?"Clash":!strcmp(profile,"tailscale")?"Tailscale":!strcmp(profile,"direct")?"直连":"未确认";snprintf(tmp,sizeof(tmp),"出口 %s · %s · %s",outlet,sh_str(d,"band",a->band[0]?a->band:"频段未知"),sh_str(d,"physical_iface","接口未知"));sh_text(b,16,74,tmp,14,SH_MUTED,287);hit_add(a,12,45,308,91,SH_SECTION+1);
  fill_round(b,12,96,308,167,13,sh_category_card(SH_NETWORK_COLOR));sh_metric(d,"download_bps",down,sizeof(down),1);sh_metric(d,"upload_bps",up,sizeof(up),1);
  sh_text(b,24,105,"↓ 下载",14,SH_MUTED,130);sh_text(b,170,105,"↑ 上传",14,SH_MUTED,126);sh_text(b,24,128,down,24,SH_TEXT,135);sh_text(b,170,128,up,24,SH_TEXT,126);
@@ -219,27 +233,24 @@ static void sh_navigation(struct drm_buf*b,struct app*a){
  fill_rect(b,0,432,320,480,SH_BG);fill_rect(b,0,432,320,433,SH_RAISED);
  for(i=0;i<5;i++){int x=i*64;int group=i==1?SH_NETWORK_COLOR:(i==2||i==3)?SH_SERVICE_COLOR:SH_DEVICE_COLOR;if(a->shell.tab==i)fill_round(b,x+5,439,x+59,474,10,sh_theme?SH_RAISED:sh_category_card(group));draw_text_center(b,x,x+64,450,t[i],14,a->shell.tab==i?sh_category_ink(group):SH_MUTED);hit_add(a,x,433,x+64,480,SH_TAB+i);}
 }
-static void sh_pager(struct drm_buf*,struct app*,int,int,int);
 static int sh_menu_count(struct app*a){return a->shell.tab==1?5:(int)(sizeof(sh_settings_sections)/sizeof(sh_settings_sections[0]))+1;}
 static void sh_section_list(struct drm_buf*b,struct app*a){
  int n=sh_menu_count(a);const char**names=a->shell.tab==1?sh_net_titles:sh_settings_titles;const char**notes=a->shell.tab==1?sh_net_notes:sh_settings_notes;
- if(a->shell.menu_page*5>=n)a->shell.menu_page=0;
- for(int j=0;j<5&&j+a->shell.menu_page*5<n;j++){int i=j+a->shell.menu_page*5;
-  if(a->shell.tab==4&&i==n-1)sh_row(b,a,76+j*60,"切换到原厂界面","备用管理入口",SH_FACTORY,1,SH_DEVICE_COLOR);
-  else sh_row(b,a,76+j*60,names[i],notes[i],SH_SECTION+i,1,sh_color_group(a->shell.tab==1?sh_net_sections[i]:sh_settings_sections[i]));
- }
- if(n>5)sh_pager(b,a,a->shell.menu_page,n,5);
-}
-static void sh_pager(struct drm_buf*b,struct app*a,int page,int count,int size){
- char txt[32];int pages=(count+size-1)/size;if(pages<1)pages=1;
- sh_button(b,a,12,384,82,40,"上一页",SH_PREV,0);sh_button(b,a,226,384,82,40,"下一页",SH_NEXT,0);snprintf(txt,sizeof(txt),"%d / %d",page+1,pages);draw_text_center(b,96,224,397,txt,14,SH_MUTED);
+ sh_scroll_begin(a,&a->shell.menu_page,n*63+8,52,428);
+ for(int i=0;i<n;i++){int y=56+i*63-a->shell.menu_page;if(y+57<=52||y>=428)continue;
+ if(a->shell.tab==4&&i==n-1)sh_row(b,a,y,"切换到原厂界面","备用管理入口",SH_FACTORY,1,SH_DEVICE_COLOR);
+ else sh_row(b,a,y,names[i],notes[i],SH_SECTION+i,1,sh_color_group(a->shell.tab==1?sh_net_sections[i]:sh_settings_sections[i]));}
+ sh_scroll_end(b,a);
 }
 static void sh_detail(struct drm_buf*b,struct app*a){
- struct panel_shell*s=&a->shell;cJSON*sec=sh_section(a,s->section);cJSON*items=sh_get(sec,"items");int n=cJSON_GetArraySize(items),i;char val[256];
+ struct panel_shell*s=&a->shell;cJSON*sec=sh_section(a,s->section),*items=sh_get(sec,"items");int n=cJSON_GetArraySize(items);char val[256];
  if(!sec){sh_wrap(b,24,100,"正在读取设置，请稍候，页面会自动更新。",268,4,SH_MUTED);return;}
- if(s->item_page*5>=n)s->item_page=0;
- for(i=0;i<5&&i+s->item_page*5<n;i++){int idx=s->item_page*5+i;cJSON*it=cJSON_GetArrayItem(items,idx);sh_value(sh_get(it,"value"),val,sizeof(val));if(!strcmp(sh_str(it,"type","info"),"action")&&!sh_get(it,"value"))snprintf(val,sizeof(val),"轻点执行");int interactive=sh_item_interactive(it);sh_row(b,a,76+i*60,sh_str(it,"label","设置"),val,interactive?SH_ITEM+i:0,interactive,sh_current_group(a));}
- sh_pager(b,a,s->item_page,n,5);
+ sh_scroll_begin(a,&s->item_page,n*63+8,52,428);
+ for(int i=0;i<n;i++){int y=56+i*63-s->item_page;if(y+57<=52||y>=428)continue;
+ cJSON*it=cJSON_GetArrayItem(items,i);sh_value(sh_get(it,"value"),val,sizeof(val));
+ if(!strcmp(sh_str(it,"type","info"),"action")&&!sh_get(it,"value"))snprintf(val,sizeof(val),"轻点执行");
+ int interactive=sh_item_interactive(it);sh_row(b,a,y,sh_str(it,"label","设置"),val,interactive?SH_ITEM+i:0,interactive,sh_current_group(a));}
+ sh_scroll_end(b,a);
 }
 /* Filtering only indexes the immutable cloned draft; never edit choices/args. */
 static cJSON *sh_choices(struct panel_shell*s){return s->modal==5?sh_get(cJSON_GetArrayItem(sh_get(s->draft,"fields"),s->field),"choices"):sh_get(s->draft,"choices");}
@@ -289,29 +300,32 @@ static void sh_editor(struct drm_buf*b,struct app*a){
 static void sh_form(struct drm_buf*b,struct app*a){
  struct panel_shell*s=&a->shell;int i;char val[SHELL_VALUE_CAP];cJSON*fs=sh_get(s->draft,"fields");
  hit_reset(a);fill_rect(b,0,0,320,480,SH_BG);sh_text(b,16,16,sh_str(s->draft,"label","修改设置"),20,SH_TEXT,285);sh_text(b,16,50,"轻点输入框编辑 · 保存后应用",14,SH_MUTED,285);
- for(i=0;i<4&&s->field_page*4+i<s->nfields;i++){int k=s->field_page*4+i;cJSON*f=cJSON_GetArrayItem(fs,k);snprintf(val,sizeof(val),"%s",s->values[k][0]?s->values[k]:"轻点输入");if(!strcmp(sh_str(f,"kind","text"),"choice")){cJSON*c;cJSON_ArrayForEach(c,sh_get(f,"choices")){char cv[SHELL_VALUE_CAP];sh_value(sh_get(c,"value"),cv,sizeof(cv));if(!strcmp(cv,s->values[k])){snprintf(val,sizeof(val),"%s",sh_str(c,"label",cv));break;}}}if(!strcmp(sh_str(f,"kind","text"),"password")&&s->values[k][0])snprintf(val,sizeof(val),"••••••••");sh_row(b,a,80+i*68,sh_str(f,"label","字段"),val,SH_FIELD+i,1,sh_current_group(a));}
- if(s->nfields>4){char p[40];snprintf(p,sizeof(p),"%d / %d",s->field_page+1,(s->nfields+3)/4);sh_button(b,a,12,358,82,40,"上一页",SH_FIELD_PREV,0);sh_button(b,a,226,358,82,40,"下一页",SH_FIELD_NEXT,0);draw_text_center(b,96,224,370,p,14,SH_MUTED);}
+ sh_scroll_begin(a,&s->field_page,s->nfields*63+8,76,396);
+ for(i=0;i<s->nfields;i++){int k=i;int y=80+i*63-s->field_page;if(y+57<=76||y>=396)continue;cJSON*f=cJSON_GetArrayItem(fs,k);snprintf(val,sizeof(val),"%s",s->values[k][0]?s->values[k]:"轻点输入");if(!strcmp(sh_str(f,"kind","text"),"choice")){cJSON*c;cJSON_ArrayForEach(c,sh_get(f,"choices")){char cv[SHELL_VALUE_CAP];sh_value(sh_get(c,"value"),cv,sizeof(cv));if(!strcmp(cv,s->values[k])){snprintf(val,sizeof(val),"%s",sh_str(c,"label",cv));break;}}}if(!strcmp(sh_str(f,"kind","text"),"password")&&s->values[k][0])snprintf(val,sizeof(val),"••••••••");sh_row(b,a,y,sh_str(f,"label","字段"),val,SH_FIELD+i,1,sh_current_group(a));}
+ sh_scroll_end(b,a);
  if(s->message[0])sh_text(b,16,400,s->message,14,SH_WARN,288);
  sh_button(b,a,12,429,142,42,"取消",SH_CANCEL,0);sh_button(b,a,166,429,142,42,"保存",SH_APPLY,1);
 }
 static void sh_modal(struct drm_buf*b,struct app*a){
  struct panel_shell*s=&a->shell;int i;
+ s->scroll_offset=NULL;
  if(s->editor){sh_editor(b,a);return;}if(s->modal==4){sh_form(b,a);return;}
  if(s->modal==6){
   hit_reset(a);fill_rect(b,0,0,320,480,SH_BG);sh_text(b,16,15,sh_str(s->draft,"label","结果"),20,SH_TEXT,288);
-  sh_text(b,16,51,"结果快照 · 左右分页阅读",14,SH_MUTED,288);
-  int total=cJSON_GetArraySize(s->report_lines);if(s->report_page*12>=total)s->report_page=0;
-  for(int j=0;j<12&&j+s->report_page*12<total;j++){cJSON*l=cJSON_GetArrayItem(s->report_lines,j+s->report_page*12);sh_text(b,20,86+j*23,cJSON_IsString(l)?l->valuestring:"",16,SH_TEXT,276);}
-  sh_pager(b,a,s->report_page,total,12);sh_button(b,a,12,432,296,40,"返回",SH_CANCEL,0);return;
+  int total=cJSON_GetArraySize(s->report_lines);sh_scroll_begin(a,&s->report_page,total*23+8,52,424);
+  for(int j=0;j<total;j++){int y=56+j*23-s->report_page;if(y+22<=52||y>=424)continue;cJSON*l=cJSON_GetArrayItem(s->report_lines,j);sh_text(b,20,y,cJSON_IsString(l)?l->valuestring:"",16,SH_TEXT,276);}
+  sh_scroll_end(b,a);sh_button(b,a,12,432,296,40,"返回",SH_CANCEL,0);return;
  }
  hit_reset(a);fill_rect(b,0,44,320,480,SH_BG);
  sh_text(b,20,65,sh_str(s->draft,"label","操作"),20,SH_TEXT,280);
- if(s->modal==1||s->modal==5){int total=cJSON_GetArraySize(sh_choices(s)),n=sh_choice_count(s),searchable=total>=12||s->choice_search[0];int y=searchable?128:106;if(s->choice_page*4>=n)s->choice_page=0;
+ if(s->modal==1||s->modal==5){int total=cJSON_GetArraySize(sh_choices(s)),n=sh_choice_count(s),searchable=total>=12||s->choice_search[0];int y=searchable?128:106;
   fill_rect(b,0,0,144,44,SH_BG);sh_text(b,16,13,"‹ 返回",18,SH_CYAN,122);hit_add(a,0,0,140,44,SH_CANCEL);
   if(searchable){fill_rect(b,12,45,308,92,SH_BG);sh_text(b,20,62,sh_str(s->draft,"label","选项"),18,SH_TEXT,179);sh_button(b,a,210,50,98,38,"搜索",SH_SEARCH,1);char summary[120];snprintf(summary,sizeof(summary),"%s · %d / %d 项",s->choice_search[0]?s->choice_search:"全部",n,total);sh_text(b,16,103,summary,14,SH_MUTED,s->choice_search[0]?209:288);if(s->choice_search[0])sh_button(b,a,234,94,74,30,"清空",SH_SEARCH_CLEAR,0);}
-  for(i=0;i<4&&s->choice_page*4+i<n;i++){cJSON*c=sh_choice_at(s,s->choice_page*4+i);sh_choice_row(b,a,y+i*63,c,SH_CHOICE+i);}
+  sh_scroll_begin(a,&s->choice_page,n*63+4,y,424);
+  for(i=0;i<n;i++){int yy=y+i*63-s->choice_page;if(yy+57<=y||yy>=424)continue;cJSON*c=sh_choice_at(s,i);sh_choice_row(b,a,yy,c,SH_CHOICE+i);}
+  sh_scroll_end(b,a);
   if(!n)sh_wrap(b,24,151,"没有匹配选项，请修改或清空搜索。",272,3,SH_MUTED);
-  sh_pager(b,a,s->choice_page,n,4);sh_button(b,a,12,432,296,40,"取消",SH_CANCEL,0);
+  sh_button(b,a,12,432,296,40,"取消",SH_CANCEL,0);
  }
  else {sh_wrap(b,20,117,s->modal==2?sh_str(s->draft,"reason","确认后立即应用此设置，请核对所选内容。"):s->message,278,14,SH_MUTED);sh_button(b,a,20,365,s->modal==2?132:280,48,s->modal==2?"取消":"返回",SH_CANCEL,0);if(s->modal==2)sh_button(b,a,168,365,132,48,"确认应用",SH_CONFIRM,1);}
 }
@@ -320,6 +334,7 @@ static void shell_render(struct drm_buf*b,struct app*a){
  static int theme_loaded=0;if(!theme_loaded){sh_theme=panel_theme_load();theme_loaded=1;logline("screen theme loaded=%s",sh_theme?"paper":"classic");}
 #endif
  struct panel_shell*s=&a->shell;const char*titles[]={"U60 Pro","网络","Clash","Tailscale","设置"};
+ s->scroll_offset=NULL;draw_clip_top=0;draw_clip_bottom=H;
  if(s->tab<0||s->tab>4)s->tab=0;fill_rect(b,0,0,320,480,SH_BG);hit_reset(a);
  const char*title=s->subpage?sh_str(sh_section(a,s->section),"title",s->section):titles[s->tab];
  int back=s->subpage&&s->tab!=2&&s->tab!=3;
@@ -327,14 +342,14 @@ static void shell_render(struct drm_buf*b,struct app*a){
  sh_statusbar(b,a,time(NULL));
  if(s->tab==0)sh_home(b,a);else if(s->subpage)sh_detail(b,a);else if(s->tab==1||s->tab==4)sh_section_list(b,a);else {sh_open_section(a,s->tab==2?"clash":"tailscale");sh_detail(b,a);}
  sh_navigation(b,a);
- if(s->busy)sh_text(b,16,420,"正在应用设置，请稍候…",14,SH_CYAN,290);
+ if(s->busy){fill_rect(b,0,0,140,44,SH_RAISED);sh_text(b,12,14,"正在应用…",16,SH_CYAN,122);}
  else if(s->status[0]&&now_ms()<s->status_until){
   /* The title area doubles as a dismissible operation receipt, without blocking navigation. */
   fill_rect(b,0,0,140,44,SH_RAISED);sh_text(b,12,5,"结果 · 轻点查看",14,SH_CYAN,122);sh_text(b,12,24,s->status,14,SH_TEXT,122);
   int receipt_hit=0;for(int h=0;h<a->nhits;h++)if(a->hits[h].id==SH_BACK){a->hits[h].id=SH_STATUS;receipt_hit=1;}if(!receipt_hit)hit_add(a,0,0,140,44,SH_STATUS);
  }
  if(s->modal||s->editor)sh_modal(b,a);
- if(s->power_open){hit_reset(a);fill_rect(b,0,0,320,480,SH_BG);sh_text(b,24,70,"电源",25,SH_TEXT,272);sh_text(b,24,110,"选择设备操作",14,SH_MUTED,272);sh_button(b,a,24,169,272,58,"关闭设备",SH_POWER_OFF,0);sh_button(b,a,24,243,272,58,"重新启动",SH_POWER_REBOOT,0);sh_button(b,a,24,337,272,54,"取消",SH_CANCEL,1);}
+ if(s->power_open){s->scroll_offset=NULL;hit_reset(a);fill_rect(b,0,0,320,480,SH_BG);sh_text(b,24,70,"电源",25,SH_TEXT,272);sh_text(b,24,110,"选择设备操作",14,SH_MUTED,272);sh_button(b,a,24,169,272,58,"关闭设备",SH_POWER_OFF,0);sh_button(b,a,24,243,272,58,"重新启动",SH_POWER_REBOOT,0);sh_button(b,a,24,337,272,54,"取消",SH_CANCEL,1);}
 }
 static void sh_save_form(struct app*a){
  struct panel_shell*s=&a->shell;cJSON*fs=sh_get(s->draft,"fields"),*base=sh_get(s->draft,"args"),*args=base?cJSON_Duplicate(base,1):cJSON_CreateObject();int i;
@@ -365,22 +380,35 @@ static int shell_hit(struct app*a,int id){
   return 1;
  }
  if(s->modal){
-  if(s->modal==6){if(id==SH_CANCEL||id==SH_BACK)sh_close(a);else if(id==SH_PREV&&s->report_page)s->report_page--;else if(id==SH_NEXT&&(s->report_page+1)*12<cJSON_GetArraySize(s->report_lines))s->report_page++;return 1;}
+  if(s->modal==6){if(id==SH_CANCEL||id==SH_BACK)sh_close(a);return 1;}
   if(id==SH_CANCEL){if(s->modal==5){s->modal=4;sh_search_reset(s);}else sh_close(a);return 1;}
   if(s->modal==1||s->modal==5){if(id==SH_REFRESH){shell_request_refresh(a);return 1;}if(id==SH_SEARCH&&cJSON_GetArraySize(sh_choices(s))>=12){snprintf(s->search_edit,sizeof(s->search_edit),"%s",s->choice_search);s->search_saved_page=s->choice_page;s->editor=2;s->key_page=0;s->shift=0;s->reveal=0;return 1;}if(id==SH_SEARCH_CLEAR){sh_search_reset(s);return 1;}}
   if(s->modal==2&&id==SH_CONFIRM){cJSON*args=cJSON_Duplicate(s->pending_args,1);sh_issue(a,args);cJSON_Delete(args);return 1;}
-  if(s->modal==4){if(id==SH_APPLY)sh_save_form(a);else if(id==SH_FIELD_PREV&&s->field_page)s->field_page--;else if(id==SH_FIELD_NEXT&&(s->field_page+1)*4<s->nfields)s->field_page++;else if(id>=SH_FIELD&&id<SH_FIELD+4){s->field=s->field_page*4+id-SH_FIELD;if(s->field<s->nfields){cJSON*f=cJSON_GetArrayItem(sh_get(s->draft,"fields"),s->field);const char*k=sh_str(f,"kind","text");s->key_page=(!strcmp(k,"number")||!strcmp(k,"ip"))?1:0;if(!strcmp(k,"choice")){s->modal=5;sh_search_reset(s);}else s->editor=1;s->reveal=0;}}return 1;}
-  if(s->modal==5){int n=sh_choice_count(s);if(id==SH_PREV&&s->choice_page)s->choice_page--;else if(id==SH_NEXT&&(s->choice_page+1)*4<n)s->choice_page++;else if(id>=SH_CHOICE&&id<SH_CHOICE+4){cJSON*c=sh_choice_at(s,s->choice_page*4+id-SH_CHOICE);if(c&&!cJSON_IsFalse(sh_get(c,"enabled"))){cJSON*v=sh_get(c,"value");if(cJSON_IsString(v)&&strlen(v->valuestring)>=SHELL_VALUE_CAP){snprintf(s->message,sizeof(s->message),"选项内容过长");}else sh_value(v,s->values[s->field],SHELL_VALUE_CAP);s->modal=4;sh_search_reset(s);}}return 1;}
-  if(s->modal==1){int n=sh_choice_count(s);if(id==SH_PREV&&s->choice_page)s->choice_page--;else if(id==SH_NEXT&&(s->choice_page+1)*4<n)s->choice_page++;else if(id>=SH_CHOICE&&id<SH_CHOICE+4){cJSON*c=sh_choice_at(s,s->choice_page*4+id-SH_CHOICE);if(c){if(cJSON_IsFalse(sh_get(c,"enabled")))return 1;else{cJSON*base=sh_get(s->draft,"args");cJSON*args=base?cJSON_Duplicate(base,1):cJSON_CreateObject();cJSON*v;cJSON_ArrayForEach(v,sh_get(c,"args")){if(v->string){cJSON_DeleteItemFromObjectCaseSensitive(args,v->string);cJSON_AddItemToObject(args,v->string,cJSON_Duplicate(v,1));}}const char*override=sh_str(c,"action","");if(*override){cJSON_DeleteItemFromObject(s->draft,"action");cJSON_AddStringToObject(s->draft,"action",override);}sh_prepare(a,args);cJSON_Delete(args);}}}return 1;}return 1;
+  if(s->modal==4){if(id==SH_APPLY)sh_save_form(a);else if(id>=SH_FIELD&&id<SH_FIELD+SHELL_MAX_FIELDS){s->field=id-SH_FIELD;if(s->field<s->nfields){cJSON*f=cJSON_GetArrayItem(sh_get(s->draft,"fields"),s->field);const char*k=sh_str(f,"kind","text");s->key_page=(!strcmp(k,"number")||!strcmp(k,"ip"))?1:0;if(!strcmp(k,"choice")){s->modal=5;sh_search_reset(s);}else s->editor=1;s->reveal=0;}}return 1;}
+  if(s->modal==5){int n=sh_choice_count(s);if(id>=SH_CHOICE&&id<SH_CHOICE+n){cJSON*c=sh_choice_at(s,id-SH_CHOICE);if(c&&!cJSON_IsFalse(sh_get(c,"enabled"))){cJSON*v=sh_get(c,"value");if(cJSON_IsString(v)&&strlen(v->valuestring)>=SHELL_VALUE_CAP){snprintf(s->message,sizeof(s->message),"选项内容过长");}else sh_value(v,s->values[s->field],SHELL_VALUE_CAP);s->modal=4;sh_search_reset(s);}}return 1;}
+  if(s->modal==1){int n=sh_choice_count(s);if(id>=SH_CHOICE&&id<SH_CHOICE+n){cJSON*c=sh_choice_at(s,id-SH_CHOICE);if(c){if(cJSON_IsFalse(sh_get(c,"enabled")))return 1;else{cJSON*base=sh_get(s->draft,"args");cJSON*args=base?cJSON_Duplicate(base,1):cJSON_CreateObject();cJSON*v;cJSON_ArrayForEach(v,sh_get(c,"args")){if(v->string){cJSON_DeleteItemFromObjectCaseSensitive(args,v->string);cJSON_AddItemToObject(args,v->string,cJSON_Duplicate(v,1));}}const char*override=sh_str(c,"action","");if(*override){cJSON_DeleteItemFromObject(s->draft,"action");cJSON_AddStringToObject(s->draft,"action",override);}sh_prepare(a,args);cJSON_Delete(args);}}}return 1;}return 1;
  }
- if(id>=SH_TAB&&id<SH_TAB+5){s->tab=id-SH_TAB;s->subpage=0;s->section[0]=0;s->item_page=0;s->menu_page=0;return 1;}
+ if(id>=SH_TAB&&id<SH_TAB+5){s->menu_offsets[s->tab]=s->menu_page;s->tab=id-SH_TAB;s->menu_page=s->menu_offsets[s->tab];s->subpage=0;s->section[0]=0;s->item_page=0;return 1;}
  if(id==SH_REFRESH){shell_request_refresh(a);return 1;}
  if(id==SH_FACTORY){shell_factory(a);return 1;}
  if(id==SH_BACK){if(s->subpage){s->subpage=0;s->item_page=0;if(s->tab==2||s->tab==3)s->tab=0;}else s->tab=0;return 1;}
  if(id>=SH_SECTION&&id<SH_SECTION+30){i=id-SH_SECTION;if(s->tab==0){if(i==1){s->tab=1;sh_open_section(a,"cell");}else if(i==20||i==21){s->tab=1;sh_open_section(a,i==20?"wifi":"usb");}else if(i==22){s->tab=2;sh_open_section(a,"clash");}else if(i==23){s->tab=3;sh_open_section(a,"tailscale");}else if(i==24){s->tab=4;sh_open_section(a,"usage");}}else if(s->tab==1&&i<5)sh_open_section(a,sh_net_sections[i]);else if(s->tab==4&&i<(int)(sizeof(sh_settings_sections)/sizeof(sh_settings_sections[0])))sh_open_section(a,sh_settings_sections[i]);return 1;}
- if(!s->subpage&&(s->tab==1||s->tab==4)){int n=sh_menu_count(a);if(id==SH_PREV&&s->menu_page)s->menu_page--;else if(id==SH_NEXT&&(s->menu_page+1)*5<n)s->menu_page++;return 1;}
+ if(!s->subpage&&(s->tab==1||s->tab==4))return 1;
  cJSON*items=sh_get(sh_section(a,s->section),"items");int n=cJSON_GetArraySize(items);
- if(id==SH_PREV&&s->item_page)s->item_page--;else if(id==SH_NEXT&&(s->item_page+1)*5<n)s->item_page++;else if(id>=SH_ITEM&&id<SH_ITEM+5){cJSON*it=cJSON_GetArrayItem(items,s->item_page*5+id-SH_ITEM);if(it)sh_open_item(a,it);}
+ if(id>=SH_ITEM&&id<SH_ITEM+n){cJSON*it=cJSON_GetArrayItem(items,id-SH_ITEM);if(it)sh_open_item(a,it);}
  return 1;
+}
+/* Contact starts on a specific hit; a drag can never become a click on release.
+ * Only a gesture beginning inside the current viewport moves it. */
+static int shell_pointer(struct app*a,int x,int y,int down,int released){
+ struct panel_shell*s=&a->shell;
+ if(down&&!s->drag_active){s->drag_active=1;s->drag_moved=0;s->drag_x=x;s->drag_y=s->drag_last_y=y;s->drag_hit=hit_find(a,x,y);s->drag_scroll=s->scroll_offset&&y>=s->scroll_top&&y<s->scroll_bottom;}
+ if(!s->drag_active)return 0;
+ if(abs(y-s->drag_y)>8||abs(x-s->drag_x)>8)s->drag_moved=1;
+ int changed=0;
+ if(s->drag_moved&&s->drag_scroll&&s->scroll_offset){int old=*s->scroll_offset;*s->scroll_offset+=s->drag_last_y-y;if(*s->scroll_offset<0)*s->scroll_offset=0;if(*s->scroll_offset>s->scroll_max)*s->scroll_offset=s->scroll_max;changed=old!=*s->scroll_offset;}
+ s->drag_last_y=y;
+ if(released||!down){if(!s->drag_moved&&s->drag_hit>=0&&s->drag_hit==hit_find(a,x,y)){shell_hit(a,s->drag_hit);changed=1;}s->drag_active=0;}
+ return changed;
 }
 #endif
