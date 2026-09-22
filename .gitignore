@@ -1,0 +1,14 @@
+build/
+dist/
+.cache/
+__pycache__/
+.DS_Store
+*.pyc
+*.log
+.env*
+config.yaml
+tailscaled.state
+charge-verified
+wifi-password-verified
+u60-prepared-private/
+prepared*/

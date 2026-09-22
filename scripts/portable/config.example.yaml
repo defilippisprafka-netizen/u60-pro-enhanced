@@ -1,0 +1,65 @@
+# No account, subscription or controller credential is included.
+# Keep this as an example until a complete private config has been provisioned.
+mixed-port: 17890
+redir-port: 17891
+allow-lan: true
+bind-address: 192.168.0.1
+mode: rule
+log-level: warning
+ipv6: false
+external-controller: 127.0.0.1:19090
+external-ui: ./ui
+secret: ""
+profile:
+  store-selected: true
+tun:
+  enable: false
+dns:
+  enable: true
+  listen: 0.0.0.0:1053
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  respect-rules: true
+  fake-ip-filter:
+    - '*.lan'
+    - '*.local'
+    - localhost
+  default-nameserver: [223.5.5.5, 119.29.29.29]
+  nameserver: [8.8.8.8, 1.1.1.1]
+  proxy-server-nameserver: [223.5.5.5, 119.29.29.29]
+  nameserver-policy:
+    'rule-set:u60-cn-domain': [https://dns.alidns.com/dns-query, https://doh.pub/dns-query]
+proxies: []
+proxy-providers: {}
+proxy-groups:
+  - name: 选择节点
+    type: select
+    proxies: [DIRECT]
+rule-providers:
+  u60-cn-domain:
+    type: file
+    behavior: domain
+    format: mrs
+    path: ./rules/cn-domain.mrs
+  u60-foreign-domain:
+    type: file
+    behavior: domain
+    format: mrs
+    path: ./rules/foreign-domain.mrs
+  u60-cn-ip:
+    type: file
+    behavior: ipcidr
+    format: mrs
+    path: ./rules/cn-ip.mrs
+rules:
+  - DOMAIN-SUFFIX,lan,DIRECT
+  - DOMAIN-SUFFIX,local,DIRECT
+  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,100.64.0.0/10,DIRECT,no-resolve
+  - RULE-SET,u60-cn-domain,DIRECT
+  - RULE-SET,u60-foreign-domain,选择节点
+  - RULE-SET,u60-cn-ip,DIRECT
+  - MATCH,选择节点

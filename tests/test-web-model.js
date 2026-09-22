@@ -1,0 +1,12 @@
+const assert=require('assert');const m=require('../web/factory/u60-web-model.js');
+assert(!m.interactive({type:'info',enabled:true,action:'state'}));
+assert(!m.interactive({type:'toggle',enabled:false,action:'wifi.ap'}));
+assert(m.interactive({type:'form',enabled:true,action:'usage.allowance'}));
+const item={args:{section:'main_5g'},fields:[{key:'ssid',label:'SSID',required:true,kind:'text'},{key:'days',label:'Day',kind:'number'}]};
+assert.deepStrictEqual(m.argumentsFor(item,null,{ssid:'A < B',days:'12'}),{section:'main_5g',ssid:'A < B',days:'12'});
+assert.deepStrictEqual(item.args,{section:'main_5g'});
+assert.throws(()=>m.argumentsFor(item,null,{ssid:'',days:'12'}));assert.throws(()=>m.argumentsFor(item,null,{ssid:'X',days:'NaN'}));
+assert.deepStrictEqual(m.argumentsFor({args:{group:'GLOBAL'}},{args:{name:'node'}}),{group:'GLOBAL',name:'node'});
+assert.strictEqual(m.bytes(1073741824,false),'1.0 GB');assert.strictEqual(m.bytes(null,true),'—');
+const sections=[{id:'wifi'},{id:'usb'},{id:'clash'},{id:'tailscale'},{id:'usage'}];assert.deepStrictEqual(m.filterSections(sections,'network').map(x=>x.id),['wifi','usb']);
+console.log('web model: passed');

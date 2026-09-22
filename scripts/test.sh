@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/.."
+mkdir -p build/tests
+for source in tests/test-charge.c tests/test-power-role.c tests/test-web-policy.c tests/test-standby-policy.c;do
+ name=$(basename "$source" .c)
+ cc -O1 -I panel -I panel/vendor "$source" panel/vendor/cJSON.c -lm -o "build/tests/$name"
+ "build/tests/$name"
+done
+for source in tests/test-*.py tests/control-test.py;do python3 "$source";done
+node tests/test-web-model.js
+(cd web/controller; go test ./...)
+for source in panel/*.sh scripts/*.sh scripts/portable/*.sh;do sh -n "$source";done
+echo 'PASS: host regression suite (not a substitute for new-device physical tests)'

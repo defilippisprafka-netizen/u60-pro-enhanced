@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#07090d" />
+  <title>U60 节点</title>
+  <style>
+    :root {
+      --bg: #07090d;
+      --bg-2: #0e131b;
+      --card: #151b25;
+      --line: rgba(255,255,255,.08);
+      --text: #eef3f8;
+      --muted: #8b97a8;
+      --accent: #3ee0b2;
+      --accent-2: #6aa7ff;
+      --warn: #ffb020;
+      --down: #ff6b7a;
+      --ok: #3ee0b2;
+      --row: 52px;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; height: 100%;
+      background: var(--bg); color: var(--text);
+      font: 15px/1.4 -apple-system, BlinkMacSystemFont, "PingFang SC", "SF Pro Text", sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body { display: flex; justify-content: center; }
+    .phone {
+      width: 100%; max-width: 420px; min-height: 100%;
+      display: flex; flex-direction: column;
+      background:
+        radial-gradient(120% 60% at 0% 0%, rgba(62,224,178,.12), transparent 50%),
+        radial-gradient(90% 50% at 100% 0%, rgba(106,167,255,.10), transparent 45%),
+        var(--bg);
+    }
+    header.app {
+      padding: 14px 16px 10px;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px;
+    }
+    .brand { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .brand b { font-size: 18px; letter-spacing: .02em; }
+    .brand span { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pill {
+      border: 1px solid var(--line); background: var(--card);
+      color: var(--text); border-radius: 999px; padding: 8px 12px;
+      font-size: 12px;
+    }
+    .pill.ok { color: var(--ok); border-color: rgba(62,224,178,.35); }
+    .pill.bad { color: var(--down); }
+    main { flex: 1; padding: 0 12px 84px; overflow: auto; }
+    .hero, .card {
+      background: var(--card); border: 1px solid var(--line);
+      border-radius: 16px; padding: 14px;
+    }
+    .hero { margin-bottom: 12px; }
+    .k { color: var(--muted); font-size: 12px; }
+    .v { font-size: 22px; font-weight: 650; margin-top: 4px; word-break: break-all; }
+    .row {
+      min-height: var(--row); display: flex; align-items: center; gap: 10px;
+      padding: 8px 12px; border-radius: 14px; border: 1px solid transparent;
+    }
+    .row + .row { margin-top: 6px; }
+    .row.active { background: rgba(62,224,178,.1); border-color: rgba(62,224,178,.28); }
+    .row:active { transform: scale(.99); }
+    .dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #3a4452; flex: 0 0 auto;
+    }
+    .dot.on { background: var(--accent); box-shadow: 0 0 0 4px rgba(62,224,178,.15); }
+    .name { flex: 1; min-width: 0; }
+    .name b { display: block; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .name small { color: var(--muted); font-size: 11px; }
+    .lat { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); min-width: 52px; text-align: right; }
+    .lat.good { color: var(--ok); }
+    .lat.mid { color: var(--warn); }
+    .lat.bad { color: var(--down); }
+    .tabs {
+      position: sticky; bottom: 0; display: grid; grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+      background: linear-gradient(to top, var(--bg) 70%, transparent);
+    }
+    .tab, button.btn, .chip {
+      appearance: none; border: 0; cursor: pointer;
+      font: inherit; color: var(--text);
+    }
+    .tab {
+      min-height: 44px; border-radius: 14px; background: var(--bg-2);
+      border: 1px solid var(--line);
+    }
+    .tab.on { background: var(--accent); color: #06281d; font-weight: 700; }
+    .chips { display: flex; gap: 8px; overflow: auto; padding: 2px 0 12px; }
+    .chip {
+      flex: 0 0 auto; min-height: 36px; padding: 0 12px; border-radius: 999px;
+      background: var(--bg-2); border: 1px solid var(--line); font-size: 13px;
+    }
+    .chip.on { background: #1b2430; border-color: var(--accent); color: var(--accent); }
+    .actions { display: flex; gap: 8px; margin: 10px 0 12px; }
+    .btn {
+      flex: 1; min-height: 44px; border-radius: 14px;
+      background: #1b2430; border: 1px solid var(--line);
+    }
+    .btn.primary { background: var(--accent); color: #06281d; font-weight: 700; border: 0; }
+    .btn:disabled { opacity: .45; }
+    .login {
+      min-height: 100%; display: flex; flex-direction: column; justify-content: center;
+      padding: 24px 18px 40px; gap: 14px;
+    }
+    input {
+      width: 100%; min-height: 48px; border-radius: 14px; border: 1px solid var(--line);
+      background: var(--card); color: var(--text); padding: 0 14px; font: inherit;
+      outline: none;
+    }
+    input:focus { border-color: var(--accent); }
+    .err { color: var(--down); font-size: 13px; min-height: 18px; }
+    .modes { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    .mode {
+      min-height: 72px; border-radius: 16px; background: var(--card);
+      border: 1px solid var(--line); display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 4px;
+    }
+    .mode.on { border-color: var(--accent); background: rgba(62,224,178,.1); }
+    .hidden { display: none !important; }
+    .toast {
+      position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%);
+      background: #111820; border: 1px solid var(--line); color: var(--text);
+      padding: 8px 12px; border-radius: 10px; font-size: 12px; opacity: 0;
+      pointer-events: none; transition: opacity .2s;
+    }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div class="phone">
+    <section id="login" class="login">
+      <div class="brand">
+        <b>U60 节点台</b>
+        <span>管理代理节点与规则</span>
+      </div>
+      <label class="k" for="host">控制器</label>
+      <input id="host" value="" autocomplete="off" />
+      <label class="k" for="secret">后台密码</label>
+      <input id="secret" type="password" autocomplete="current-password" />
+      <div class="err" id="loginErr"></div>
+      <button class="btn primary" id="loginBtn" type="button">进入</button>
+    </section>
+
+    <section id="app" class="hidden">
+      <header class="app">
+        <div class="brand">
+          <b>U60 节点台</b>
+          <span id="statusLine">连接中</span>
+        </div>
+        <div class="pill" id="modePill">—</div>
+      </header>
+      <main>
+        <div id="page-home">
+          <div class="hero">
+            <div class="k">当前节点</div>
+            <div class="v" id="nowName">—</div>
+            <div class="k" id="nowMeta" style="margin-top:8px">尚未测速</div>
+          </div>
+          <div class="actions">
+            <button class="btn" id="pingNow" type="button">测当前延迟</button>
+            <button class="btn" id="reload" type="button">刷新</button>
+          </div>
+          <div class="card">
+            <div class="k">策略组</div>
+            <div id="homeGroups" style="margin-top:8px"></div>
+          </div>
+        </div>
+        <div id="page-nodes" class="hidden">
+          <div class="chips" id="groupChips"></div>
+          <div class="actions">
+            <button class="btn primary" id="pingAll" type="button">测本组延迟</button>
+          </div>
+          <div id="nodeList"></div>
+        </div>
+        <div id="page-mode" class="hidden">
+          <div class="k" style="margin: 4px 4px 10px">分流模式</div>
+          <div class="modes">
+            <button class="mode" data-mode="rule" type="button"><b>规则</b><span class="k">智能分流</span></button>
+            <button class="mode" data-mode="global" type="button"><b>全局</b><span class="k">全部走代理</span></button>
+            <button class="mode" data-mode="direct" type="button"><b>直连</b><span class="k">不走代理</span></button>
+          </div>
+          <p class="k" style="margin:14px 4px 0">切换只影响新连接。Wi-Fi 名称和密码不会被这个页面改动。</p>
+        </div>
+      </main>
+      <nav class="tabs">
+        <button class="tab on" data-page="home" type="button">总览</button>
+        <button class="tab" data-page="nodes" type="button">节点</button>
+        <button class="tab" data-page="mode" type="button">分流</button>
+      </nav>
+    </section>
+  </div>
+  <div class="toast" id="toast"></div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const state = {
+      host: localStorage.getItem("u60.host") || guessHost(),
+      secret: sessionStorage.getItem("u60.secret") || "",
+      page: "home",
+      group: "",
+      proxies: {},
+      mode: "",
+      delays: JSON.parse(sessionStorage.getItem("u60.delays") || "{}")
+    };
+
+    function guessHost() {
+      const { protocol, hostname, port } = location;
+      if (hostname && hostname !== "localhost") {
+        if (port && port !== "80" && port !== "443") return location.origin;
+        return protocol + "//" + hostname + ":19090";
+      }
+      return "http://127.0.0.1:19090";
+    }
+
+    $("host").value = state.host;
+    $("secret").value = state.secret;
+
+    function toast(msg) {
+      const el = $("toast");
+      el.textContent = msg;
+      el.classList.add("show");
+      clearTimeout(toast._t);
+      toast._t = setTimeout(() => el.classList.remove("show"), 1600);
+    }
+
+    async function api(path, opts = {}) {
+      const headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
+      if (state.secret) headers["Authorization"] = "Bearer " + state.secret;
+      const res = await fetch(state.host.replace(/\/$/, "") + path, Object.assign({ cache: "no-store" }, opts, { headers }));
+      if (res.status === 401 || res.status === 403) throw new Error("密码不对");
+      if (!res.ok) throw new Error("接口 " + res.status);
+      const text = await res.text();
+      return text ? JSON.parse(text) : {};
+    }
+
+    function latClass(ms) {
+      if (ms == null) return "";
+      if (ms < 180) return "good";
+      if (ms < 400) return "mid";
+      return "bad";
+    }
+
+    function visibleGroups(proxies) {
+      return Object.values(proxies).filter((p) => p && p.type === "Selector" && p.hidden !== true && Array.isArray(p.all) && p.all.length);
+    }
+
+    function renderHome() {
+      const groups = visibleGroups(state.proxies);
+      const main = groups.find((g) => /选择节点|PROXY|默认代理/.test(g.name)) || groups[0];
+      $("nowName").textContent = main && main.now ? main.now : "未选择";
+      const delay = main && state.delays[main.now];
+      $("nowMeta").textContent = delay != null ? ("最近延迟 " + delay + " ms") : "点测速查看延迟";
+      $("modePill").textContent = ({ rule: "规则", global: "全局", direct: "直连" }[state.mode] || state.mode || "—");
+      $("modePill").className = "pill ok";
+      $("homeGroups").innerHTML = groups.map((g) => (
+        '<div class="row ' + (g === main ? "active" : "") + '" data-jump="' + encodeURIComponent(g.name) + '">' +
+          '<div class="dot ' + (g === main ? "on" : "") + '"></div>' +
+          '<div class="name"><b>' + g.name + '</b><small>' + (g.now || "") + '</small></div>' +
+        '</div>'
+      )).join("") || '<div class="k">还没有策略组</div>';
+      $("homeGroups").onclick = (e) => {
+        const row = e.target.closest("[data-jump]");
+        if (!row) return;
+        state.group = decodeURIComponent(row.dataset.jump);
+        switchPage("nodes");
+      };
+    }
+
+    function renderNodes() {
+      const groups = visibleGroups(state.proxies);
+      if (!state.group && groups[0]) state.group = groups[0].name;
+      $("groupChips").innerHTML = groups.map((g) => (
+        '<button class="chip ' + (g.name === state.group ? "on" : "") + '" data-g="' + encodeURIComponent(g.name) + '" type="button">' + g.name + "</button>"
+      )).join("");
+      $("groupChips").onclick = (e) => {
+        const b = e.target.closest("[data-g]");
+        if (!b) return;
+        state.group = decodeURIComponent(b.dataset.g);
+        renderNodes();
+      };
+      const g = state.proxies[state.group];
+      const names = (g && g.all) || [];
+      $("nodeList").innerHTML = names.map((name) => {
+        const d = state.delays[name];
+        const active = g && g.now === name;
+        return '<div class="row ' + (active ? "active" : "") + '" data-node="' + encodeURIComponent(name) + '">' +
+          '<div class="dot ' + (active ? "on" : "") + '"></div>' +
+          '<div class="name"><b>' + name + '</b><small>' + (active ? "使用中" : "轻点切换") + '</small></div>' +
+          '<div class="lat ' + latClass(d) + '">' + (d == null ? "—" : d + "ms") + "</div>" +
+        "</div>";
+      }).join("") || '<div class="k">这个组没有节点</div>';
+    }
+
+    function renderMode() {
+      document.querySelectorAll(".mode").forEach((el) => {
+        el.classList.toggle("on", el.dataset.mode === state.mode);
+      });
+    }
+
+    function switchPage(page) {
+      state.page = page;
+      ["home", "nodes", "mode"].forEach((p) => {
+        $("page-" + p).classList.toggle("hidden", p !== page);
+      });
+      document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.dataset.page === page));
+      if (page === "home") renderHome();
+      if (page === "nodes") renderNodes();
+      if (page === "mode") renderMode();
+    }
+
+    async function refresh() {
+      const [cfg, px] = await Promise.all([api("/configs"), api("/proxies")]);
+      state.mode = cfg.mode;
+      state.proxies = px.proxies || {};
+      $("statusLine").textContent = "已连接 · " + Object.keys(state.proxies).length + " 项";
+      if (state.page === "home") renderHome();
+      if (state.page === "nodes") renderNodes();
+      if (state.page === "mode") renderMode();
+    }
+
+    async function selectNode(name) {
+      const group = encodeURIComponent(state.group);
+      await api("/proxies/" + group, { method: "PUT", body: JSON.stringify({ name }) });
+      const now = await api("/proxies/" + group);
+      if (now.now !== name) throw new Error("切换未生效");
+      toast("已切换到 " + name);
+      await refresh();
+    }
+
+    async function delayOf(name) {
+      const url = encodeURIComponent("https://www.gstatic.com/generate_204");
+      const path = "/proxies/" + encodeURIComponent(name) + "/delay?url=" + url + "&timeout=5000";
+      try {
+        const r = await api(path);
+        state.delays[name] = r.delay;
+      } catch (_) {
+        state.delays[name] = 9999;
+      }
+      sessionStorage.setItem("u60.delays", JSON.stringify(state.delays));
+    }
+
+    $("loginBtn").onclick = async () => {
+      state.host = $("host").value.trim().replace(/\/$/, "");
+      state.secret = $("secret").value;
+      $("loginErr").textContent = "";
+      $("loginBtn").disabled = true;
+      try {
+        await api("/version");
+        localStorage.setItem("u60.host", state.host);
+        sessionStorage.setItem("u60.secret", state.secret);
+        $("login").classList.add("hidden");
+        $("app").classList.remove("hidden");
+        await refresh();
+      } catch (e) {
+        $("loginErr").textContent = e.message || "连不上控制器";
+      } finally {
+        $("loginBtn").disabled = false;
+      }
+    };
+
+    $("nodeList").addEventListener("click", async (e) => {
+      const row = e.target.closest("[data-node]");
+      if (!row) return;
+      try { await selectNode(decodeURIComponent(row.dataset.node)); }
+      catch (err) { toast(err.message); }
+    });
+
+    $("pingAll").onclick = async () => {
+      const g = state.proxies[state.group];
+      const names = (g && g.all) || [];
+      $("pingAll").disabled = true;
+      for (const name of names) {
+        await delayOf(name);
+        renderNodes();
+      }
+      $("pingAll").disabled = false;
+    };
+
+    $("pingNow").onclick = async () => {
+      const groups = visibleGroups(state.proxies);
+      const main = groups.find((g) => /选择节点|PROXY|默认代理/.test(g.name)) || groups[0];
+      if (!main || !main.now) return;
+      $("pingNow").disabled = true;
+      await delayOf(main.now);
+      renderHome();
+      $("pingNow").disabled = false;
+    };
+
+    $("reload").onclick = () => refresh().catch((e) => toast(e.message));
+
+    document.querySelectorAll(".tab").forEach((t) => {
+      t.onclick = () => switchPage(t.dataset.page);
+    });
+    document.querySelectorAll(".mode").forEach((el) => {
+      el.onclick = async () => {
+        try {
+          await api("/configs", { method: "PATCH", body: JSON.stringify({ mode: el.dataset.mode }) });
+          const cfg = await api("/configs");
+          if (cfg.mode !== el.dataset.mode) throw new Error("模式未回读");
+          state.mode = cfg.mode;
+          renderMode();
+          renderHome();
+          toast("已改为" + el.querySelector("b").textContent);
+        } catch (e) { toast(e.message); }
+      };
+    });
+
+    if (state.secret) $("loginBtn").click();
+  </script>
+</body>
+</html>

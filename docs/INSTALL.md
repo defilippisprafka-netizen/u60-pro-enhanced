@@ -1,0 +1,59 @@
+# 安装与首次配置
+
+## 前提
+
+仅国行 B28（`BD_FLYMODEMMU5250V1.0.0B28`）与指定原厂 ABI。安装器拒绝覆盖已有同名项目目录；本首版没有通用升级/迁移功能。不要为了安装盲目升级或降级固件。
+
+1. 阅读 README 和验证风险清单；自行备份必要配置。确保知道如何通过 USB ADB 恢复。
+2. 用户自行启用 root ADB，安装 Google 官方 Android Platform Tools。解锁方法参考社区来源，兼容性由用户核对，本项目不执行解锁或下载刷机固件。
+3. USB 数据线直接连接电脑，设备亮屏；拔下 USB 网卡，电脑保持其他可用网络用于下载依赖。不要远程跨 Tailscale 执行首次安装。
+4. `adb devices` 只连接一台待安装设备。至少有 400 MB `/data` 空间。
+
+## 准备与安装
+
+解压 Release 安装包进入其目录。macOS/Linux 使用终端；Windows 可使用 Python 3 与 adb.exe，Windows 完整流程尚未实测。若 adb 不在 PATH，每条命令加 `--adb /实际路径/adb`；多设备加 `--serial 目标序列号`，不要把它写到公开问题里。
+
+```sh
+python3 prepare.py
+```
+
+这一步只读取目标的固件信息和三份固定网页资源，不读取用户配置，不写设备。联网下载固定版本及校验过的依赖，在相邻目录生成 `u60-prepared-private/`。该目录含目标机派生的原厂网页资源，不是可再分发的公开发布物。准备失败时删除这一次未完成的输出目录后重试，不要跳过校验。
+
+```sh
+cd ../u60-prepared-private
+python3 deploy-from-computer.py check
+python3 deploy-from-computer.py install
+python3 deploy-from-computer.py start
+```
+
+`check` 会上传本地经过校验的安装材料到 `/data/u60-packages/` 并只读检查兼容性；`install` 写入新程序及启动项、保存原厂 `/etc/rc.local`，但不启动服务；`start` 启动屏幕与网页扩展。校验失败不要强制继续。请实际测试屏幕、电源键和原有热点，确认成功再配置网络服务。
+
+初始不含运行中的 Clash 配置或 Tailscale 身份。充电能力与 Wi-Fi 密码加密写入能力没有移植开发机验收标记；相应按钮可能显示“待验证”并拒绝操作，这是首版明确保留的限制。不要从他人设备复制验证标记。
+
+## Clash 首次使用
+
+以下命令明确授权在**这台目标设备本机**生成新的随机 Clash 控制密钥并创建配置，不使用他人凭据：
+
+```sh
+adb shell sh /data/u60-panel/setup-clash.sh
+```
+
+配置仅写入目标 `/data/u60-clash/config.yaml`，权限 0600，控制 API 只监听本机。初始组选择 DIRECT，先保持直连。
+
+登录原厂网页 → 增强功能 → Clash，添加自己的 **Mihomo proxy-provider 格式**订阅，选择目标策略组、保存/更新。普通完整配置、Base64 分享链接或任意机场格式不保证直接兼容；不提供第三方在线转换服务。先选择节点，确认测速可用，再启用代理路由与规则模式。新增订阅不会自行切走当前节点。
+
+分别测试国内站点和需要代理的站点，并核查连接命中的策略；仅“网页打开”不足以证明命中预期规则。不要将管理端口映射到公网。初始 LAN 为原厂 `192.168.0.0/24`，自定义 LAN 地址需同时审核 Clash 绑定、DNS 和子网设置，当前没有自动迁移保证。
+
+## Tailscale 首次使用
+
+```sh
+adb shell sh /data/u60-panel/setup-tailscale.sh
+```
+
+按终端给出的登录链接，在自己的浏览器完成登录。这会在设备创建自己的持久身份，链接和 state 文件不得公开。首次初始化没有在第二台设备实测；若中途失败，保留状态，先排查，不能通过复制别人的 state 绕过。
+
+默认不接管 DNS，不自动发布子网或使用出口节点。登录后用屏幕/网页启用下属设备转发；需要外部访问热点设备时，发布实际 LAN CIDR，再自行到 Tailscale 后台批准并授权对应访问策略。参考 [Tailscale 子网路由说明](https://tailscale.com/kb/1019/subnets)。外部测试设备应断开 U60 Wi-Fi，使用其他网络。
+
+## 安装后验收
+
+按 docs/VALIDATION.md 完成自己的验收。遇到原厂 UI 能恢复而新 UI 不正常，先双击电源切回原厂，再按回退文档处理。未确认远程通道和恢复方法前，不做断线/整卡拔出或远程重启实验。

@@ -1,0 +1,31 @@
+{
+  "mihomo": {
+    "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.31/mihomo-linux-arm64-v1.19.31.gz",
+    "sha256": "9e0f11afbf38426b8bd88fdc594678f8161c57eccb4e1b77acb12b493904f1d4",
+    "format": "gzip",
+    "target": "u60-clash/mihomo"
+  },
+  "tailscale": {
+    "url": "https://pkgs.tailscale.com/stable/tailscale_1.102.4_arm64.tgz",
+    "sha256": "9dd1e6a592a014bbaea0103167ffe299adeda4ba14e078ce9c2895364f6c4c3f",
+    "format": "tailscale-tar"
+  },
+  "cn-domain": {
+    "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/160377cf695a103b48478b880ecf7eb5d705c453/geo/geosite/cn.mrs",
+    "sha256": "022015f9f2848b3093a9e9221c5c43580624c777a7456cc7c738a5e2a5973b47",
+    "format": "raw",
+    "target": "u60-clash/rules/cn-domain.mrs"
+  },
+  "foreign-domain": {
+    "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/160377cf695a103b48478b880ecf7eb5d705c453/geo/geosite/geolocation-!cn.mrs",
+    "sha256": "a50b9780e81dc82523ae210ed2a5bd3760dc5a80ec5e4503d4fb4c620f2607e2",
+    "format": "raw",
+    "target": "u60-clash/rules/foreign-domain.mrs"
+  },
+  "cn-ip": {
+    "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/160377cf695a103b48478b880ecf7eb5d705c453/geo/geoip/cn.mrs",
+    "sha256": "b31b5cb7ce4400e2c9fda7bb53f325b06f2520bb0a8883b5f47c9ebae9da01f3",
+    "format": "raw",
+    "target": "u60-clash/rules/cn-ip.mrs"
+  }
+}

@@ -1,0 +1,331 @@
+#!/bin/sh
+# U60 USB role coordinator. The mode is a request; live routes prove activation.
+set -u
+umask 077
+BASE=${U60_USB_TEST_ROOT:-}
+ROOT="$BASE/data/u60-panel"
+RUN="$BASE/tmp/u60-usb-role"
+NET="$BASE/sys/class/net"
+UCI=${USB_UCI:-uci}
+UBUS=${USB_UBUS:-ubus}
+IP=${USB_IP:-ip}
+EBT=${USB_EBTABLES:-ebtables}
+JSONFILTER=${USB_JSONFILTER:-jsonfilter}
+SELF=${USB_SELF:-$ROOT/usb-role.sh}
+DHCP_EVENT=${USB_DHCP_EVENT:-$ROOT/usb-dhcp-event.sh}
+UDHCPC=${USB_UDHCPC:-udhcpc}
+CELLULAR=${USB_CELLULAR_HELPER:-$ROOT/usb-cellular-route.sh}
+mkdir -p "$RUN"
+get() { "$UCI" -q get "$1" 2>/dev/null; }
+requested() {
+ req=$(cat "$ROOT/usb-role" 2>/dev/null || true)
+ case "$req" in AUTO|LAN) ;; *) req=LAN;; esac
+ printf '%s' "$req"
+}
+phase() { printf '%s\n' "$1" > "$RUN/phase.$$"; mv "$RUN/phase.$$" "$RUN/phase"; }
+default4() { "$IP" -4 route show default 2>/dev/null; }
+cell4_ready() { default4 | grep -q ' dev rmnet_data'; }
+cell6_ready() { "$IP" -6 route show default 2>/dev/null | grep -q ' dev rmnet_data'; }
+adapter_present() { [ -e "$NET/eth0" ]; }
+supported() {
+ dev=$(readlink -f "$NET/eth0/device") || return 1
+ driver=$(readlink -f "$NET/eth0/device/driver") || return 1
+ parent=${dev%/*}
+ [ "${driver##*/}" = ax_usb_nic ] &&
+ [ "$(cat "$parent/idVendor" 2>/dev/null)" = 0b95 ] &&
+ [ "$(cat "$parent/idProduct" 2>/dev/null)" = 1790 ]
+}
+link_up() { [ "$(cat "$NET/eth0/carrier" 2>/dev/null)" = 1 ]; }
+bridge_member() { [ "$(basename "$(readlink -f "$NET/eth0/master" 2>/dev/null)")" = br-lan ]; }
+ebt_rule() {
+ chain=$1; shift
+ "$EBT" -L "$chain" 2>/dev/null | grep -F -q -- "$*" || "$EBT" -A "$chain" "$@"
+}
+isolate_bridge() {
+ "$EBT" -L U60_USB_GUARD >/dev/null 2>&1 || "$EBT" -N U60_USB_GUARD || return 1
+ ebt_rule U60_USB_GUARD -j DROP || return 1
+ ebt_rule INPUT -i eth0 -j U60_USB_GUARD || return 1
+ ebt_rule OUTPUT -o eth0 -j U60_USB_GUARD || return 1
+ ebt_rule FORWARD -i eth0 -j U60_USB_GUARD || return 1
+ ebt_rule FORWARD -o eth0 -j U60_USB_GUARD
+}
+release_bridge() {
+ while "$EBT" -D INPUT -i eth0 -j U60_USB_GUARD >/dev/null 2>&1; do :; done
+ while "$EBT" -D OUTPUT -o eth0 -j U60_USB_GUARD >/dev/null 2>&1; do :; done
+ while "$EBT" -D FORWARD -i eth0 -j U60_USB_GUARD >/dev/null 2>&1; do :; done
+ while "$EBT" -D FORWARD -o eth0 -j U60_USB_GUARD >/dev/null 2>&1; do :; done
+ "$EBT" -F U60_USB_GUARD >/dev/null 2>&1 || true
+ "$EBT" -X U60_USB_GUARD >/dev/null 2>&1 || true
+}
+activate_rmnet() {
+ cfg=$1
+ runtime=$("$UBUS" -t 5 call "network.interface.$cfg" status 2>/dev/null) || return 0
+ auto=$(printf '%s' "$runtime" | "$JSONFILTER" -e '@.autostart' 2>/dev/null)
+ [ ! -e "$BASE/tmp/rmnet_script_$cfg.lock" ] || return 0
+ pending=$(printf '%s' "$runtime" | "$JSONFILTER" -e '@.pending' 2>/dev/null)
+ [ "$pending" != true ] || return 0
+ # A factory `down` persists as autostart=false across a network reload.
+ # Re-enable via netifd, rather than calling the vendor protocol shell manually.
+ if [ "$auto" = false ]; then
+  "$UBUS" -t 5 call "network.interface.$cfg" up >/dev/null || return 1
+  write_run services_at 0; write_run settle_until "$(( $(now)+100 ))"
+ fi
+}
+cellular_config() {
+ # Stay in AUTO while restoring LTE, so a new adapter cannot become a LAN port.
+ mode=$(get zwrt_router.network.opms_wan_mode)
+ case "$mode" in PPP|AUTO) ;; *) return 1;; esac
+ dirty=0
+ [ "$(get network.zte_wan.proto)" = rmnet ] || dirty=1
+ [ -z "$(get network.zte_wan.ifname)" ] || dirty=1
+ [ "$(get network.zte_wan.ipv6)" = 0 ] || dirty=1
+ [ "$(get network.zte_wan6.proto)" = rmnet ] || dirty=1
+ [ "$(get network.zte_wan6.ipv6)" = 1 ] || dirty=1
+ [ -z "$(get network.zte_wan6.ifname)" ] || dirty=1
+ # B27's native pull-out handler updates modem/DNS/cutoff bookkeeping.
+ # Route-only repair leaves stale upstream DNS and can provoke reboot 1155.
+ # The handler itself leaves eth0 bindings behind: remove those BEFORE it runs.
+ if [ "$mode" = AUTO ] && { [ "$(get zwrt_router.network.opms_wan_auto_mode)" != AUTO_LTE_GATEWAY ] || [ "$(get network.zte_wan.proto)" != rmnet ] || [ "$(get network.zte_wan6.proto)" != rmnet ] || [ "$(get zwrt_router.tmp_router.current_wan_interface)" = eth0 ]; }; then
+  stamp=$(now); last=$(cat "$RUN/native_at" 2>/dev/null || echo 0)
+  if [ "$last" -gt 0 ] && [ "$((stamp-last))" -lt 10 ]; then return 1; fi
+  phase RESTORING
+  write_run native_at "$stamp"
+  "$UCI" -q delete network.zte_wan.ifname || true
+  "$UCI" -q delete network.zte_wan6.ifname || true
+  # B27 preserves DHCP ipv6=1 on the IPv4 section; clear it before native restore.
+  "$UCI" set network.zte_wan.ipv6=0 || return 1
+  "$UCI" set network.zte_wan6.ipv6=1 || return 1
+  "$UCI" commit network || return 1
+  # It can time out after applying changes; trust the read-back, not exit alone.
+  "$UBUS" -t 15 call zwrt_router.api router_smart_wan_event '{"notify_event":"notify_rj45_pull_out"}' >/dev/null || true
+  [ "$(get zwrt_router.network.opms_wan_auto_mode)" = AUTO_LTE_GATEWAY ] || return 1
+  [ "$(get network.zte_wan.proto)" = rmnet ] && [ "$(get network.zte_wan6.proto)" = rmnet ] || return 1
+  dirty=0
+  [ "$(get network.zte_wan.ipv6)" = 0 ] && [ "$(get network.zte_wan6.ipv6)" = 1 ] && [ -z "$(get network.zte_wan.ifname)$(get network.zte_wan6.ifname)" ] || dirty=1
+  write_run services_at 0; write_run settle_until "$((stamp+100))"
+ fi
+ if [ "$dirty" = 1 ]; then
+  phase RESTORING
+  "$UCI" set network.zte_wan.proto=rmnet || return 1
+  "$UCI" set network.zte_wan.profile=1 || return 1
+  "$UCI" set network.zte_wan.ipv6=0 || return 1
+  "$UCI" -q delete network.zte_wan.ifname || true
+  "$UCI" set network.zte_wan6.proto=rmnet || return 1
+  "$UCI" set network.zte_wan6.profile=1 || return 1
+  "$UCI" set network.zte_wan6.ipv6=1 || return 1
+  "$UCI" -q delete network.zte_wan6.ifname || true
+  "$UCI" commit network || return 1
+  "$UBUS" -t 5 call network reload || return 1
+ fi
+ stock_sleeping && return 0
+ if ! cell4_ready; then activate_rmnet zte_wan || true; stock_sleeping || "$CELLULAR" 4 || true; fi
+ stock_sleeping && return 0
+ if ! cell6_ready; then activate_rmnet zte_wan6 || true; stock_sleeping || "$CELLULAR" 6 || true; fi
+ cell4_ready
+}
+now() { cut -d . -f 1 "$BASE/proc/uptime"; }
+write_run() { printf '%s\n' "$2" > "$RUN/$1.$$"; mv "$RUN/$1.$$" "$RUN/$1"; }
+wan_ready() {
+ supported && link_up && ! bridge_member &&
+ [ "$(get zwrt_router.network.opms_wan_mode)" = AUTO ] &&
+ [ "$(get network.zte_wan.proto)" = dhcp ] &&
+ default4 | grep -q ' dev eth0' || return 1
+ "$IP" -4 -o addr show dev eth0 | grep -q ' inet '
+}
+clear_eth_addresses() {
+ adapter_present || return 0
+ supported || return 1
+ "$IP" -4 addr flush dev eth0 scope global || return 1
+ "$IP" -6 addr flush dev eth0 scope global || return 1
+}
+set_mode() {
+ [ "$(get zwrt_router.network.opms_wan_mode)" = "$1" ] && return 0
+ phase SWITCHING
+ "$UBUS" -t 5 call zwrt_router.api router_set_wan_mode "{\"opms_wan_mode\":\"$1\"}" >/dev/null || return 1
+ [ "$(get zwrt_router.network.opms_wan_mode)" = "$1" ]
+}
+reconcile_services() (
+ # Serialize with screen mutations, and read the profile only after locking.
+ exec 7>"$BASE/tmp/u60-control.lock"
+ flock -n 7 || exit 1
+ profile=$(cat "$ROOT/network-profile" 2>/dev/null) || exit 1
+ case "$profile" in clash|direct|tailscale) ;; *) exit 1;; esac
+ "$ROOT/network-profile.sh" "$profile" >/dev/null || exit 1
+ "$ROOT/tailscale-lan.sh" reconcile >/dev/null || exit 1
+)
+services_after_change() {
+ route=$(default4 | awk '/^default/{print $3 ":" $5;exit}')
+ [ -n "$route" ] || return 0
+ previous=$(cat "$RUN/exit" 2>/dev/null || true)
+ stamp=$(now)
+ if [ "$route" != "$previous" ]; then
+  write_run exit "$route"; write_run settle_until "$((stamp+100))"; write_run services_at 0
+  if [ -x "$BASE/data/tailscale/bin/tailscale" ]; then
+   "$BASE/data/tailscale/bin/tailscale" --socket=/tmp/tailscale/tailscaled.sock debug rebind >/dev/null 2>&1 || true
+  fi
+ fi
+ last=$(cat "$RUN/services_at" 2>/dev/null || echo 0)
+ until=$(cat "$RUN/settle_until" 2>/dev/null || echo 0)
+ if [ "$last" = 0 ] || { [ "$stamp" -le "$until" ] && [ "$((stamp-last))" -ge 20 ]; }; then
+  reconcile_services && write_run services_at "$stamp"
+ fi
+}
+# Pure-shell fast path for an empty adapter port. Never defers attachment,
+# role changes, route loss or the post-switch settling window.
+idle_ready() {
+ [ ! -e "$NET/eth0" ] && [ ! -e "$RUN/suspended" ] || return 1
+ idle_req=''; IFS= read -r idle_req < "$ROOT/usb-role" || [ -n "$idle_req" ] || return 1
+ [ "$idle_req" = "${1:-}" ] || return 1
+ idle_phase=''; IFS= read -r idle_phase < "$RUN/phase" || [ -n "$idle_phase" ] || return 1
+ case "$idle_req:$idle_phase" in LAN:LAN|AUTO:CELLULAR) ;; *) return 1;; esac
+ idle_until=0; read -r idle_until < "$RUN/settle_until" 2>/dev/null || true
+ idle_uptime=""; read -r idle_uptime idle_rest < "$BASE/proc/uptime" || [ -n "$idle_uptime" ] || return 1
+ idle_uptime=${idle_uptime%%.*}
+ case "$idle_until:$idle_uptime" in *[!0-9:]*|:*) return 1;; esac
+ [ "$idle_uptime" -gt "$idle_until" ] || return 1
+ idle_v4=0
+ while read -r idle_if idle_dest idle_gw idle_flags idle_rest; do
+  case "$idle_if:$idle_dest" in rmnet_data*:00000000) ;; *) continue;; esac
+  case "$idle_flags" in ''|*[!0-9a-fA-F]*) continue;; esac
+  [ "$((0x$idle_flags & 513))" = 1 ] && idle_v4=1 && break
+ done < "$BASE/proc/net/route"
+ [ "$idle_v4" = 1 ] || return 1
+ while read -r idle_dest idle_prefix idle_src idle_srcprefix idle_gw idle_metric idle_ref idle_use idle_flags idle_if; do
+  [ "$idle_dest:$idle_prefix" = 00000000000000000000000000000000:00 ] || continue
+  case "$idle_if" in rmnet_data*) ;; *) continue;; esac
+  case "$idle_flags" in ''|*[!0-9a-fA-F]*) continue;; esac
+  [ "$((0x$idle_flags & 513))" = 1 ] && return 0
+ done < "$BASE/proc/net/ipv6_route"
+ return 1
+}
+
+stock_sleeping() { [ -x "$ROOT/panel-standby" ] && "$ROOT/panel-standby" blocked; }
+reconcile() {
+ [ ! -e "$RUN/suspended" ] || return 0
+ [ ! -e "$BASE/tmp/u60-standby/asleep" ] || return 0
+ # Stock sleep intentionally withdraws PDP/default routes. Never redial it as
+ # a missing-route fault. The observer is native and has no network side effects.
+ stock_sleeping && return 0
+ req=$(requested)
+ if adapter_present && ! supported; then phase ERROR; return 1; fi
+ if [ "$req" = LAN ]; then
+  # A live upstream may never be bridged by a delayed/stale request.
+  if [ "$(get zwrt_router.network.opms_wan_mode)" != PPP ] && link_up; then phase UNPLUG; return 1; fi
+  if [ "$(get zwrt_router.network.opms_wan_mode)" != PPP ]; then clear_eth_addresses || return 1; fi
+  set_mode PPP || { phase ERROR; return 1; }
+  cellular_config || { phase RESTORING; return 1; }
+  release_bridge
+  phase LAN
+ else
+  isolate_bridge || { phase ERROR; return 1; }
+  set_mode AUTO || { phase ERROR; return 1; }
+  # Reassert bridge separation if the vendor hotplug path adds eth0 back.
+  if bridge_member; then "$IP" link set dev eth0 nomaster || return 1; fi
+  if ! adapter_present || ! link_up; then
+   clear_eth_addresses || return 1
+   rm -f "$RUN/attachment" "$RUN/probe_at" "$RUN/accepted"
+   cellular_config || { phase RESTORING; return 1; }
+   phase CELLULAR
+  elif wan_ready; then
+   phase WAN
+  else
+   # Retain the modem until a validated upstream lease is actually adopted.
+   if [ "$(get network.zte_wan.proto)" != dhcp ]; then cellular_config || true; fi
+   ident=$(cat "$NET/eth0/ifindex")
+   attachment=$(cat "$RUN/attachment" 2>/dev/null || true)
+   if [ "$attachment" != "$ident" ]; then
+    write_run attachment "$ident"; write_run probe_at "$(now)"; phase DETECTING; return 0
+   fi
+   stamp=$(now); last=$(cat "$RUN/probe_at" 2>/dev/null || echo 0)
+   [ "$((stamp-last))" -ge 3 ] || return 0
+   # Give native netifd DHCP setup a bounded window after callback adoption.
+   accepted=$(cat "$RUN/accepted" 2>/dev/null || echo 0)
+   if [ "$accepted" -gt 0 ] && [ "$((stamp-accepted))" -lt 20 ]; then phase DETECTING; return 0; fi
+   if [ "$accepted" -gt 0 ]; then cellular_config || true; rm -f "$RUN/accepted"; fi
+   phase DETECTING
+   "$IP" link set dev eth0 up || return 1
+   export U60_USB_ATTACHMENT="$ident"
+   "$UDHCPC" -f -q -n -i eth0 -t 3 -T 2 -s "$DHCP_EVENT" -p "$RUN/dhcp.pid" >/dev/null 2>&1 || true
+   write_run probe_at "$(now)"
+   if [ ! -e "$RUN/accepted" ]; then
+    failure=$(cat "$RUN/phase")
+    # Timeout is never evidence that a cable is a LAN client.
+    if cellular_config; then
+     if [ "$failure" = CONFLICT ]; then phase CONFLICT; else phase NO_UPSTREAM; fi
+    else phase RESTORING; fi
+   fi
+  fi
+ fi
+ services_after_change
+}
+set_request() {
+ if [ "$1" = AUTO ] && [ -f "$ROOT/relay-private/enabled" ];then echo '{"ok":false,"message":"请先断开Wi-Fi中继，再切换USB AUTO"}';return 2;fi
+ case "${1:-}" in AUTO|LAN) ;; *) echo '{"ok":false,"message":"请选择 AUTO 或 LAN"}'; return 2;; esac
+ if adapter_present && ! supported; then echo '{"ok":false,"message":"当前网卡尚未适配"}'; return 2; fi
+ if [ "$1" = LAN ] && [ "$(get zwrt_router.network.opms_wan_mode)" != PPP ] && link_up; then
+  echo '{"ok":false,"message":"请先拔网线，再切换 LAN 接电脑"}'; return 2
+ fi
+ # Protect before persisting AUTO: works even before the watcher gets its turn.
+ if [ "$1" = AUTO ]; then isolate_bridge || { echo '{"ok":false,"message":"网口隔离未就绪"}'; return 1; }; fi
+ printf '%s\n' "$1" > "$ROOT/usb-role.$$" && mv "$ROOT/usb-role.$$" "$ROOT/usb-role" || return 1
+ rm -f "$RUN/suspended"
+ phase SWITCHING
+ echo '{"ok":true,"message":"已保存，正在切换；以网口状态为准"}'
+}
+status() {
+ req=$(requested); current=$(cat "$RUN/phase" 2>/dev/null || true)
+ adapter=false; link=false; ipv4=''; gateway=''; badge=''; state=WAIT_ADAPTER
+ message='未接网卡'
+ if adapter_present; then
+  adapter=true
+  if link_up; then link=true; fi
+  if ! supported; then state=UNSUPPORTED; badge=ERROR; message='网卡尚未适配';
+  elif [ "$link" = false ]; then state=WAIT_CABLE; badge=WAIT; message='网卡已接入，等待网线';
+  elif [ "$req" = LAN ] && bridge_member && [ "$(get zwrt_router.network.opms_wan_mode)" = PPP ]; then
+   state=LAN; badge=LAN; message='LAN：向电脑或其他设备供网'
+  elif [ "$req" = AUTO ] && wan_ready; then
+   state=WAN; badge=WAN; message='WAN：有线上网'
+   ipv4=$("$IP" -4 -o addr show dev eth0 | awk '$3=="inet" && $4 !~ /^169[.]254[.]/ {split($4,a,"/");print a[1];exit}')
+   gateway=$(default4 | awk '/ dev eth0/{print $3;exit}')
+  else state=DETECTING; badge=WAIT; message='正在识别上级网络'; fi
+ fi
+ case "$current" in RESTORING) state=RESTORING;badge=WAIT;message='正在恢复蜂窝网络';; SWITCHING) state=SWITCHING;badge=WAIT;message='正在切换网口角色';; UNPLUG) state=UNPLUG;badge=ERROR;message='请先拔网线，再切换 LAN';; NO_UPSTREAM) state=NO_UPSTREAM;badge=WAIT;message='未获取上级地址，继续使用蜂窝';; CONFLICT) state=CONFLICT;badge=ERROR;message='上级与 U60 内网地址冲突';; ERROR) state=ERROR;badge=ERROR;message='切换未完成，请查看网线或改用 LAN';; esac
+ if [ "$adapter" = false ] && [ "$req" = AUTO ]; then message='未接网卡 · 使用蜂窝'; fi
+ case "$ipv4$gateway" in *[!0-9.]*) ipv4='';gateway='';state=ERROR;badge=ERROR;; esac
+ printf '{"ok":true,"requested":"%s","state":"%s","adapter":%s,"link":%s,"ipv4":"%s","gateway":"%s","badge":"%s","message":"%s"}\n' "$req" "$state" "$adapter" "$link" "$ipv4" "$gateway" "$badge" "$message"
+}
+case "${1:-status}" in
+ status) status;;
+ set) set_request "${2:-}";;
+ prepare) [ "$(requested)" != AUTO ] || isolate_bridge;;
+ reconcile)
+  exec 8>"$RUN/lock"; flock -n 8 || exit 3
+  reconcile;;
+ boot-watch)
+  while [ ! -e "$BASE/tmp/zte_boot_done" ]; do sleep 2; done
+  exec "$SELF" watch;;
+ watch)
+  exec 9>"$RUN/watch.lock"; flock -n 9 || exit 0
+  echo $$ > "$RUN/watch.pid"
+ idle_count=0; idle_last_req=""
+ while :; do
+  if [ -f "$BASE/tmp/u60-standby/asleep" ];then sleep 2;continue;fi
+  if [ "$idle_count" -lt 14 ] && idle_ready "$idle_last_req"; then
+   idle_count=$((idle_count+1))
+  else
+   # Children must not retain the singleton lock across a watcher restart.
+   (exec 9>&-; "$SELF" reconcile) >/dev/null 2>&1
+   idle_count=0; idle_last_req=""
+   IFS= read -r idle_last_req < "$ROOT/usb-role" || true
+  fi
+  sleep 2
+ done;;
+ idle-ready) idle_ready "${2:-}";;
+ to-cellular)
+  exec 9>"$RUN/lock"; flock -n 9 || exit 3
+  cellular_config
+  ;;
+ isolate) isolate_bridge;;
+ release) release_bridge;;
+ *) printf '%s\n' '{"ok":false,"message":"此操作尚未开放"}'; exit 2;;
+esac

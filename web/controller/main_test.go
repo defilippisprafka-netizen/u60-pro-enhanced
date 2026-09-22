@@ -1,0 +1,312 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"gopkg.in/yaml.v3"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+const fixture = `mixed-port: 17890
+secret: "private-test-secret"
+mode: rule
+proxy-providers:
+  old:
+    type: http
+    url: "https://provider.invalid/sub?token=private-test-token"
+    interval: 1800
+    path: ./proxy_provider/old.yaml
+proxy-groups:
+  - name: Main
+    type: select
+    proxies: [Old, DIRECT]
+  - name: Old
+    type: select
+    use: [old]
+rules:
+  # U60-PANEL-RULES-BEGIN
+  - DOMAIN-SUFFIX,example.org,DIRECT
+  # U60-PANEL-RULES-END
+  - MATCH,Main
+`
+
+func testApp(t *testing.T) *App {
+	t.Helper()
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(fixture), 0600)
+	a := &App{root: dir}
+	a.validate = func(p string) error {
+		b, e := os.ReadFile(p)
+		if e != nil {
+			return e
+		}
+		var root yaml.Node
+		return yaml.Unmarshal(b, &root)
+	}
+	a.reload = func() error { return nil }
+	a.testAPI = func(method, path string, d any) (M, error) {
+		if path == "/proxies" {
+			return M{"proxies": M{"Main": M{"type": "Selector", "all": []any{"Old", "DIRECT"}, "now": "Old"}, "Old": M{"type": "Selector", "all": []any{"leaf"}, "now": "leaf"}}}, nil
+		}
+		if strings.HasPrefix(path, "/providers/proxies/") {
+			return M{"proxies": []any{M{"name": "leaf"}}}, nil
+		}
+		return M{}, nil
+	}
+	return a
+}
+func TestSubscriptionAddPreservesUnrelatedConfig(t *testing.T) {
+	a := testApp(t)
+	old, _, _ := a.config()
+	r := a.saveSubscription(M{"name": "New provider", "url": "https://new.invalid/sub?token=new-test-token", "interval": "3600", "destination": "Main", "revision": sha(old)})
+	if !boolv(r["ok"]) {
+		t.Fatal(r)
+	}
+	b, root, e := a.config()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if nstr(named(named(root, "proxy-providers"), "New provider"), "url") != "https://new.invalid/sub?token=new-test-token" {
+		t.Fatal("provider missing")
+	}
+	if !bytes.Equal(bytes.SplitN(old, []byte("rules:\n"), 2)[1], bytes.SplitN(b, []byte("rules:\n"), 2)[1]) {
+		t.Fatal("rules or screen markers changed")
+	}
+	if nstr(root, "secret") != "private-test-secret" || nstr(root, "mode") != "rule" {
+		t.Fatal("unrelated config changed")
+	}
+	if len(localRules(b)) != 1 {
+		t.Fatal("screen local rules lost")
+	}
+	st, _ := os.Stat(filepath.Join(a.root, "config.yaml"))
+	if st.Mode().Perm() != 0600 {
+		t.Fatal("credential config permissions")
+	}
+}
+func TestRejectedSubscriptionDoesNotWrite(t *testing.T) {
+	for _, url := range []string{"file:///etc/passwd", "https://user:pass@example.com/x", "https://example.com/x\nheaders: x", "javascript:alert(1)"} {
+		a := testApp(t)
+		old, _, _ := a.config()
+		r := a.saveSubscription(M{"name": "New", "url": url, "interval": "3600", "destination": "Main", "revision": sha(old)})
+		if boolv(r["ok"]) {
+			t.Fatal("accepted", url)
+		}
+		b, _, _ := a.config()
+		if !bytes.Equal(old, b) {
+			t.Fatal("invalid request changed config")
+		}
+	}
+}
+func TestStaleRevisionAndValidationFailure(t *testing.T) {
+	a := testApp(t)
+	old, _, _ := a.config()
+	args := M{"name": "New", "url": "https://new.invalid/sub", "interval": "3600", "destination": "Main", "revision": "stale"}
+	if boolv(a.saveSubscription(args)["ok"]) {
+		t.Fatal("stale accepted")
+	}
+	args["revision"] = sha(old)
+	a.validate = func(string) error { return errors.New("secret-bearing compiler error must not leak") }
+	r := a.saveSubscription(args)
+	if boolv(r["ok"]) || strings.Contains(text(r["message"]), "secret-bearing") {
+		t.Fatal(r)
+	}
+	b, _, _ := a.config()
+	if !bytes.Equal(old, b) {
+		t.Fatal("validation did not preserve config")
+	}
+}
+func TestReloadFailureRollsBack(t *testing.T) {
+	a := testApp(t)
+	old, _, _ := a.config()
+	calls := 0
+	a.reload = func() error {
+		calls++
+		if calls == 1 {
+			return errors.New("failed")
+		}
+		return nil
+	}
+	r := a.saveSubscription(M{"name": "New", "url": "https://new.invalid/sub", "interval": "3600", "destination": "Main", "revision": sha(old)})
+	if boolv(r["ok"]) || calls != 2 {
+		t.Fatal(r, calls)
+	}
+	b, _, _ := a.config()
+	if !bytes.Equal(old, b) {
+		t.Fatal("rollback did not restore bytes")
+	}
+}
+func TestActiveSubscriptionCannotBeDeleted(t *testing.T) {
+	a := testApp(t)
+	old, _, _ := a.config()
+	r := a.deleteSubscription(M{"name": "old", "revision": sha(old)})
+	if boolv(r["ok"]) {
+		t.Fatal("active subscription deleted")
+	}
+	b, _, _ := a.config()
+	if !bytes.Equal(b, old) {
+		t.Fatal("active config changed")
+	}
+}
+func TestUnselectedSubscriptionCanBeDeleted(t *testing.T) {
+	a := testApp(t)
+	original := a.testAPI
+	a.testAPI = func(m, p string, d any) (M, error) {
+		if p == "/proxies" {
+			return M{"proxies": M{"Main": M{"type": "Selector", "all": []any{"Old", "DIRECT"}, "now": "DIRECT"}, "Old": M{"type": "Selector", "all": []any{"leaf"}, "now": "leaf"}}}, nil
+		}
+		return original(m, p, d)
+	}
+	old, _, _ := a.config()
+	r := a.deleteSubscription(M{"name": "old", "revision": sha(old)})
+	if !boolv(r["ok"]) {
+		t.Fatal(r)
+	}
+	_, root, _ := a.config()
+	if named(named(root, "proxy-providers"), "old") != nil {
+		t.Fatal("provider retained")
+	}
+}
+func TestStateNeverReturnsSubscriptionCredentials(t *testing.T) {
+	a := testApp(t)
+	s := a.clashState()
+	for _, v := range arr(s["providers"]) {
+		p := obj(v)
+		if _, ok := p["url"]; ok {
+			t.Fatal("url exposed")
+		}
+		if text(p["host"]) != "provider.invalid" {
+			t.Fatal(p)
+		}
+	}
+}
+func TestRoutesValidation(t *testing.T) {
+	got, e := parseRoutes("192.168.1.7/24,192.168.1.0/24\n10.0.0.0/24")
+	if e != nil || len(got) != 2 || got[1] != "192.168.1.0/24" {
+		t.Fatal(got, e)
+	}
+	for _, v := range []string{"0.0.0.0/0", "::/0", "127.0.0.0/8", "224.0.0.0/4", "garbage"} {
+		if _, e = parseRoutes(v); e == nil {
+			t.Fatal("accepted invalid route", v)
+		}
+	}
+}
+
+// An isolated real core validates provider parsing, reloads, selection retention,
+// failed downloads and deletion without touching the router configuration.
+func TestRealMihomoSubscriptionLifecycle(t *testing.T) {
+	bin := os.Getenv("TEST_MIHOMO")
+	if bin == "" {
+		t.Skip("TEST_MIHOMO not supplied")
+	}
+	bin, _ = filepath.Abs(bin)
+	sub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/bad" {
+			w.WriteHeader(503)
+			return
+		}
+		fmt.Fprintln(w, "proxies:\n  - name: Test leaf\n    type: socks5\n    server: 127.0.0.1\n    port: 9")
+	}))
+	defer sub.Close()
+	l, _ := net.Listen("tcp", "127.0.0.1:0")
+	addr := l.Addr().String()
+	l.Close()
+	a := &App{root: t.TempDir(), apiBase: "http://" + addr, http: &http.Client{Timeout: 20 * time.Second}}
+	initial := []byte("external-controller: " + addr + "\nsecret: isolated-test\nmode: rule\nlog-level: silent\nproxy-providers: {}\nproxy-groups:\n  - name: Main\n    type: select\n    proxies: [DIRECT, REJECT]\nrules:\n  # U60-PANEL-RULES-BEGIN\n  # U60-PANEL-RULES-END\n  - MATCH,Main\n")
+	os.WriteFile(filepath.Join(a.root, "config.yaml"), initial, 0600)
+	cmd := exec.Command(bin, "-d", a.root)
+	if e := cmd.Start(); e != nil {
+		t.Fatal(e)
+	}
+	defer func() { cmd.Process.Kill(); cmd.Wait() }()
+	until := time.Now().Add(10 * time.Second)
+	for {
+		if _, e := a.api("GET", "/version", nil); e == nil {
+			break
+		}
+		if time.Now().After(until) {
+			t.Fatal("core did not start")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	a.validate = func(p string) error { return exec.Command(bin, "-t", "-d", a.root, "-f", p).Run() }
+	a.reload = func() error {
+		_, e := a.api("PUT", "/configs?force=true", M{"path": filepath.Join(a.root, "config.yaml")})
+		return e
+	}
+	args := M{"name": "Test sub", "url": sub.URL + "/good", "interval": "3600", "destination": "Main", "revision": sha(initial)}
+	if r := a.saveSubscription(args); !boolv(r["ok"]) {
+		t.Fatal(r)
+	}
+	proxies, e := a.api("GET", "/proxies", nil)
+	if e != nil || text(obj(obj(proxies["proxies"])["Main"])["now"]) != "DIRECT" {
+		t.Fatal("selection changed", e)
+	}
+	good, _, _ := a.config()
+	args["existing"] = "Test sub"
+	args["revision"] = sha(good)
+	args["url"] = sub.URL + "/bad"
+	if r := a.saveSubscription(args); boolv(r["ok"]) {
+		t.Fatal("failed download accepted")
+	}
+	got, _, _ := a.config()
+	if !bytes.Equal(good, got) {
+		t.Fatal("failed URL did not restore exact config")
+	}
+	args["url"] = ""
+	args["interval"] = "1800"
+	if r := a.saveSubscription(args); !boolv(r["ok"]) {
+		t.Fatal("edit", r)
+	}
+	got, _, _ = a.config()
+	if r := a.deleteSubscription(M{"name": "Test sub", "revision": sha(got)}); !boolv(r["ok"]) {
+		t.Fatal("delete", r)
+	}
+	_, root, _ := a.config()
+	if named(named(root, "proxy-providers"), "Test sub") != nil {
+		t.Fatal("delete retained provider")
+	}
+}
+
+func TestTailscaleHostnameChangesOnlyMaskedPreference(t *testing.T) {
+	dir, e := os.MkdirTemp("/tmp", "u60-ts-")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer os.RemoveAll(dir)
+	sock := filepath.Join(dir, "ts.sock")
+	l, e := net.Listen("unix", sock)
+	if e != nil {
+		t.Fatal(e)
+	}
+	prefs := M{"Hostname": "old-name", "RouteAll": true, "CorpDNS": false, "AdvertiseRoutes": []any{"192.168.0.0/24"}, "ExitNodeID": "keep-exit"}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "PATCH" {
+			var p M
+			json.NewDecoder(r.Body).Decode(&p)
+			if len(p) != 2 || !boolv(p["HostnameSet"]) {
+				t.Error("unrelated preferences modified")
+			}
+			prefs["Hostname"] = p["Hostname"]
+		}
+		json.NewEncoder(w).Encode(prefs)
+	})}
+	go server.Serve(l)
+	defer server.Close()
+	a := &App{tsSock: sock}
+	if r := a.tailscaleSet("web.tailscale.hostname", M{"hostname": "new-name"}); !boolv(r["ok"]) {
+		t.Fatal(r)
+	}
+	if text(prefs["Hostname"]) != "new-name" || !boolv(prefs["RouteAll"]) || text(prefs["ExitNodeID"]) != "keep-exit" {
+		t.Fatal("preferences not preserved")
+	}
+}

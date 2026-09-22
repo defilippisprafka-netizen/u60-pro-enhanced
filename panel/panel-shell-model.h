@@ -1,0 +1,30 @@
+#ifndef PANEL_SHELL_MODEL_H
+#define PANEL_SHELL_MODEL_H
+#define SHELL_MAX_FIELDS 24
+#define SHELL_VALUE_CAP 256
+#define SHELL_SEARCH_CAP 64
+struct panel_shell {
+ cJSON *snapshot; /* root owns; UI only reads. */
+ int tab, subpage, item_page, choice_page, field_page, menu_page;
+ cJSON *report_lines; /* transient text only; never persisted */
+ int report_page;
+ int busy;
+ long status_until; /* worker activity; root updates, UI displays and blocks duplicate submits */
+ char status[160]; /* optional root operation result/status */
+ char section[32];
+ int modal, editor, field, key_page, shift, reveal, power_open;
+ cJSON *draft; /* owned deep copy; never replaced by background refresh */
+ cJSON *pending_args;
+ int nfields;
+ char choice_search[SHELL_SEARCH_CAP], search_edit[SHELL_SEARCH_CAP];
+ int search_saved_page; /* keyboard cancel restores the existing result page */
+ char values[SHELL_MAX_FIELDS][SHELL_VALUE_CAP];
+ char message[256];
+};
+struct app;
+/* Dispatch borrows args; copy synchronously before asynchronous execution. */
+static void shell_dispatch(struct app *,const char *,cJSON *);
+static void shell_request_refresh(struct app *);
+static void shell_factory(struct app *);
+static void shell_power(struct app *,int);
+#endif
