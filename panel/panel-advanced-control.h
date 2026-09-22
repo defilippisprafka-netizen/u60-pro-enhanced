@@ -88,8 +88,8 @@ static void control_advanced_sections(cJSON*root){
  adv_section(root,"band","频段与小区");adv_section(root,"sim","SIM 卡状态");adv_section(root,"clients","已连接设备");adv_section(root,"diagnostics","网络诊断");
  for(size_t n=0;n<sizeof(adv_specs)/sizeof(adv_specs[0]);n++){
   const struct adv_spec*sp=&adv_specs[n];cJSON*s=adv_section(root,sp->section,sp->section),*r=adv_read_spec(sp),*v=jget(r,sp->readkey),*i;int current=adv_bool(v);char text[256];scalar_text(v,text,sizeof(text));
-  if(sp->kind<2)i=toggle(s,sp->action,sp->label,sp->action,current==1,current>=0,"原厂未提供确定状态，不能安全切换");
-  else if(sp->kind==2){i=item(s,sp->action,sp->label,"choice",text,sp->action,cJSON_IsString(v)&&*v->valuestring,"当前选网状态不可读");choice(i,"自动 4G / 5G","value","WL_AND_5G");choice(i,"仅 5G","value","Only_5G");choice(i,"仅 4G","value","Only_LTE");}
+  if(sp->kind<2)i=toggle(s,sp->action,sp->label,sp->action,current==1,current>=0,current<0?"原厂未提供确定状态，不能安全切换":sp->kind==1?NULL:"修改可能影响当前连接");
+  else if(sp->kind==2){i=item(s,sp->action,sp->label,"choice",text,sp->action,cJSON_IsString(v)&&*v->valuestring,cJSON_IsString(v)&&*v->valuestring?"切换制式可能短暂断网":"当前选网状态不可读");choice(i,"自动 4G / 5G","value","WL_AND_5G");choice(i,"仅 5G","value","Only_5G");choice(i,"仅 4G","value","Only_LTE");}
   else {i=item(s,sp->action,sp->label,"form",text,sp->action,cJSON_IsString(v)&&adv_csv(v->valuestring),"修改频段可能导致失联，请保留可用频段");field(i,"value","允许频段（逗号分隔）",cJSON_IsString(v)?v->valuestring:"","text",1);}
   if(sp->kind==1)cJSON_ReplaceItemInObject(i,"confirm",cJSON_CreateBool(0));cJSON_Delete(r);
  }

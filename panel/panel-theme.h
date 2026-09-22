@@ -8,7 +8,7 @@
 #define PANEL_THEME_FILE "/data/u60-panel/theme"
 #endif
 static int panel_theme_id(const char *name){return name&&!strcmp(name,"paper")?1:name&&!strcmp(name,"classic")?0:-1;}
-static const char *panel_theme_name(int id){return id==1?"纸白蓝":"原有深色";}
+static const char *panel_theme_name(int id){return id==1?"纸白蓝":"曜石彩卡";}
 static int panel_theme_load(void){
  char b[24];FILE*f=fopen(PANEL_THEME_FILE,"r");if(!f)return 0;
  size_t n=fread(b,1,sizeof(b)-1,f);int complete=feof(f);fclose(f);if(!complete)return 0;

@@ -9,6 +9,24 @@
  }
  function readable(value){if(value===null||typeof value==='undefined'||value==='')return '—';if(typeof value==='boolean')return value?'开启':'关闭';return String(value);}
  function bytes(v,speed){if(typeof v!=='number'||!isFinite(v)||v<0)return '—';var units=speed?['B/s','KB/s','MB/s','GB/s']:['B','KB','MB','GB','TB'],i=0;while(v>=1024&&i<units.length-1){v/=1024;i++;}return v.toFixed(v>=100||i===0?0:1)+' '+units[i];}
- function filterSections(sections,tab){var groups={network:['wifi','usb','router','cell','clients'],clash:['clash'],tailscale:['tailscale'],device:['battery','usage','system'],more:['band','signal','sim','sms','diagnostics']};return (sections||[]).filter(function(s){return groups[tab]&&groups[tab].indexOf(s.id)>=0;});}
+ // Web-only presentation: keep additions; stock controls stay in the stock pages.
+ var additions={
+  wifi:['relay','relay-scan'],usb:['role','status','wiring'],
+  battery:['charge.manual','charge.policy','usb.power_role','power.standby','usb.charge_state','charge.connected','charge.temp','charge.voltage','charge.current','charge.policy_status','power.standby_state'],
+  band:['band.lte','band.sa','band.nsa','wan_active_band','nr5g_action_band','nr5g_pci','nr5g_action_channel'],
+  signal:['signal.serving','signal.neighbors'],diagnostics:['diag.web']
+ };
+ function filterSections(sections,tab){
+  var groups={network:['wifi','usb'],clash:['clash'],tailscale:['tailscale'],device:['battery'],more:['band','signal','diagnostics']};
+  return (sections||[]).filter(function(s){return groups[tab]&&groups[tab].indexOf(s.id)>=0;}).map(function(s){
+   var items=(s.items||[]).filter(function(i){
+    if(s.id==='clash')return ['clash.select','clash.delay','clash.provider','clash.rule_add','clash.rule_edit','diag.connections','clash.close_connections'].indexOf(i.action)<0;
+    if(s.id==='tailscale')return i.action!=='tailscale.peer_test'&&i.id!=='self-ip'&&i.id!=='backend'&&(i.id||'').indexOf('peer_')!==0;
+    return (additions[s.id]||[]).indexOf(i.id)>=0;
+   });
+   if(additions[s.id])items.sort(function(a,b){return additions[s.id].indexOf(a.id)-additions[s.id].indexOf(b.id);});
+   return Object.assign({},s,{title:s.id==='wifi'?'Wi-Fi 中继':s.id==='battery'?'充电与深待机':s.title,items:items});
+  }).filter(function(s){return s.items.length>0;});
+ }
  return {interactive:interactive,argumentsFor:argumentsFor,readable:readable,bytes:bytes,filterSections:filterSections};
 }));

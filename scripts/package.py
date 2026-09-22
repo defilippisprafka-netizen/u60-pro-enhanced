@@ -3,7 +3,7 @@
 import hashlib,importlib.util,pathlib,shutil,tarfile
 R=pathlib.Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('prepare',R/'scripts/prepare.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
-VERSION='v0.1.0-experimental';out=R/'dist'/('u60-pro-enhanced-'+VERSION)
+VERSION='v0.1.1-experimental';out=R/'dist'/('u60-pro-enhanced-'+VERSION)
 if out.exists():raise SystemExit('Release directory exists; inspect it before rebuilding')
 out.mkdir(parents=True)
 for n in ['prepare.py']:shutil.copyfile(R/'scripts'/n,out/n)
@@ -29,13 +29,13 @@ web=data/'u60-web';shutil.copyfile(R/'web/factory/mount.sh',web/'mount.sh');(web
 shutil.copyfile(R/'packaging/factory-web.sha256',web/'factory.sha256')
 for local,remote in [('u60-web-advanced.js','js/u60-web-advanced.js'),('u60-enhanced.js','js/auth/u60-enhanced.js'),('u60-web-model.js','js/u60-web-model.js'),('u60-enhanced.html','tmpl/auth/u60-enhanced.html')]:
  dest=web/'public'/remote;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(R/'web/factory'/local,dest)
-(web/'public/u60-extension-version.txt').write_text('20260922-4\n')
+(web/'public/u60-extension-version.txt').write_text('20260922-8\n')
 (p/'init').mkdir();(p/'boot').mkdir()
 for local,remote in [('usb-isolate','u60-usb-isolate'),('usb-role','u60-usb-role'),('wifi-relay','u60-wifi-relay'),('standby','u60-standby'),('web','u60-web')]:
  shutil.copyfile(R/'panel'/(local+'-init.sh'),p/'init'/remote);(p/'init'/remote).chmod(0o700)
 shutil.copyfile(R/'scripts/portable/portable-boot.sh',p/'boot/portable-boot.sh')
 for n in ['check-device.sh','install-new-device.sh','restore-boot.sh','deploy-from-computer.py']:shutil.copyfile(R/'scripts/portable'/n,i/n)
-shutil.copyfile(R/'packaging/FACTORY-SHA256SUMS',i/'FACTORY-SHA256SUMS');(i/'RELEASE-ID').write_text('u60-pro-B28-20260922-010000\n')
+shutil.copyfile(R/'packaging/FACTORY-SHA256SUMS',i/'FACTORY-SHA256SUMS');(i/'RELEASE-ID').write_text('u60-pro-B28-20260922-140000\n')
 m.manifest(out);m.verify(out)
 archive=out.parent/(out.name+'.tar.gz')
 with tarfile.open(archive,'w:gz') as tar:

@@ -3,17 +3,24 @@
 import argparse,gzip,hashlib,io,json,pathlib,re,shutil,subprocess,tarfile,urllib.request
 ROOT=pathlib.Path(__file__).resolve().parent
 WEB={'index.html':('<ul class="main-navigation-list">','<ul class="main-navigation-list">\n<li class="navigation-drawer -u60-enhanced"><a href="#u60_enhanced" class="parent-link link">增强功能</a></li>'),
- 'js/main.js':('require.config({paths:','require.config({urlArgs:"u60=20260922-4",paths:'),
+ 'js/main.js':('require.config({paths:','require.config({urlArgs:"u60=20260922-8",paths:'),
  'js/config/ufi/U60Pro/menu.js':('return[','return[{hash:"#u60_enhanced",path:"auth/u60-enhanced",requireLogin:!0,checkSIMStatus:!1},')}
 def sha(data):return hashlib.sha256(data).hexdigest()
 def patch_web(name,data,expected):
  if sha(data)!=expected:raise ValueError('Factory web fingerprint mismatch: '+name)
  text=data.decode('utf-8');old,new=WEB[name]
  if text.count(old)!=1:raise ValueError('Unexpected factory web layout')
- text=text.replace(old,new,1)
  if name=='index.html':
+  # Preserve every stock menu, append our entry after nested submenus.
+  start=text.index(old)+len(old);depth=1;end=None
+  for match in re.finditer(r'</?ul\b[^>]*>',text[start:]):
+   depth += -1 if match.group().startswith('</') else 1
+   if depth==0:end=start+match.start();break
+  if end is None:raise ValueError('Unclosed stock navigation')
+  text=text[:end]+'<li class="navigation-drawer -u60-enhanced"><a href="#u60_enhanced" class="parent-link link">增强功能</a></li>'+text[end:]
   if text.count('data-main="js/main"')!=1:raise ValueError('Unexpected main script')
-  text=text.replace('data-main="js/main"','data-main="js/main.js?u60=20260922-4"')
+  text=text.replace('data-main="js/main"','data-main="js/main.js?u60=20260922-8"')
+ else:text=text.replace(old,new,1)
  return text.encode('utf-8')
 def verify(root):
  expected={'SHA256SUMS'}
