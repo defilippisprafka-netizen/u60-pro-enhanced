@@ -2,7 +2,7 @@
 
 中兴 U60 Pro（MU5250）国行原厂系统上的**屏幕 UI + 原厂网页版增强**。保留中兴系统、基带、Wi-Fi 驱动和原厂界面，不是 OpenWrt 固件，也不是整机刷机包。
 
-**已发布安装包为 `v0.1.1-experimental`；`main` 已包含后续修复，源码构建标记为 `v0.1.2-dev`，尚未发布对应 Release。** 仅接受国行 B28、Linux 5.15.185-perf、ARM64，且原厂文件指纹一致的设备。B27、港版/国际版和其他固件未做验证。开发机的功能验证不等于第二台全新设备已安装验收；首次安装流程目前经过模拟测试，尚未在第二台实机验证。不能接受网络中断或手动恢复操作的用户，请暂缓安装。
+**当前安装包为 [v0.1.2-experimental](https://github.com/defilippisprafka-netizen/u60-pro-enhanced/releases/tag/v0.1.2-experimental)，已包含双热点中继和最新屏幕修复。** 仅接受国行 B28、Linux 5.15.185-perf、ARM64，且原厂文件指纹一致的设备。B27、港版/国际版和其他固件未做验证。开发机的功能验证不等于第二台全新设备已安装验收；首次安装流程目前经过模拟测试，尚未在第二台实机验证。不能接受网络中断或手动恢复操作的用户，请暂缓安装。
 
 
 ## 相比原厂增加了什么
@@ -17,9 +17,9 @@
 | 电源与待机 | 保留电源键操作；充电/直供、待机服务策略与详情 | 同步充电状态和控制；危险能力按本机验收结果锁定 |
 | 其他 | 流量账本、蜂窝信息与部分高级设置 | 原厂页面继续承担原有管理功能；增强页不宣称覆盖所有社区端点 |
 
-**边界：** 透明代理的已验证范围是 IPv4 TCP 与 DNS；普通 UDP、IPv6 全量代理、所有业务场景的防泄漏没有完成验证。Tailscale 的双向子网访问需要管理端批准路由和访问策略，不会自动放开账号权限。`main` 支持选择一个 2.4GHz 或非 DFS 的 5GHz 上游，同时保留两个热点；不是双 Wi-Fi 聚合，断线可能回退蜂窝。旧 v0.1.1 安装包仍为 2.4GHz 上游与 5GHz 下游。USB AUTO 用于上游 WAN，**连接电脑作为下游必须选 LAN**，不是自动猜测电脑角色。
+**边界：** 透明代理的已验证范围是 IPv4 TCP 与 DNS；普通 UDP、IPv6 全量代理、所有业务场景的防泄漏没有完成验证。Tailscale 的双向子网访问需要管理端批准路由和访问策略，不会自动放开账号权限。v0.1.2 支持选择一个 2.4GHz 或非 DFS 的 5GHz 上游，同时保留两个热点；不是双 Wi-Fi 聚合，断线可能回退蜂窝。旧 v0.1.1 安装包仍为 2.4GHz 上游与 5GHz 下游。USB AUTO 用于上游 WAN，**连接电脑作为下游必须选 LAN**，不是自动猜测电脑角色。
 
-## main 最新改动（尚未打包发布）
+## v0.1.2 更新
 
 双频中继不再要求关闭自身 2.4G 热点，连接和更换上游合并入口。修复信道切换后“热点能搜到但认证失败”，核对驱动实际信道；修复首页中继标题周期性闪为运营商名称。屏幕菜单支持滑动、记住滚动位置并避免滑动误触。操作与验收边界见 [Wi-Fi 中继说明](docs/WIFI-RELAY.md) 和 [更新记录](docs/CHANGELOG.md)。
 
@@ -37,7 +37,7 @@
 - [回退](docs/RECOVERY.md)：保留原厂启动文件，不抹除用户配置。
 - [社区来源与许可证](THIRD_PARTY_NOTICES.md)。
 
-从本仓库 **Releases** 下载 `u60-pro-enhanced-v0.1.1-experimental.tar.gz`，核对同页 `SHA256SUMS.txt`。GitHub 的自动 Source code 包是源码，不含编译程序；需要自行构建。
+从 [v0.1.2 Release](https://github.com/defilippisprafka-netizen/u60-pro-enhanced/releases/tag/v0.1.2-experimental) 下载 [安装包](https://github.com/defilippisprafka-netizen/u60-pro-enhanced/releases/download/v0.1.2-experimental/u60-pro-enhanced-v0.1.2-experimental.tar.gz)，核对同页 [SHA256SUMS.txt](https://github.com/defilippisprafka-netizen/u60-pro-enhanced/releases/download/v0.1.2-experimental/SHA256SUMS.txt)。GitHub 的自动 Source code 包是源码，不含编译程序；需要自行构建。
 
 安装包没有任何现成节点、订阅、密码、Tailscale 身份、SSH 私钥或开发机配置。首次默认直连、普通待机、USB LAN；保留目标机原有 Wi-Fi 频段设置。**不会替你升级固件、解锁 ADB 或创建云端账户。** 需要用户自己完成设备解锁及配置。
 
