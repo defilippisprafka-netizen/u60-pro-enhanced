@@ -34,11 +34,12 @@ def main():
   serial=devices[0]
  if serial not in devices:raise SystemExit('Selected ADB device is not ready')
  ident=(ROOT/'RELEASE-ID').read_text().strip()
- if not re.fullmatch(r'u60-pro-B28-[0-9]{8}-[0-9]{6}',ident):raise SystemExit('Invalid release id')
+ match=re.fullmatch(r'u60-pro-(B28|B31)-[0-9]{8}-[0-9]{6}',ident)
+ if not match:raise SystemExit('Invalid release id')
  remote='/data/u60-packages/'+ident
  adb=[a.adb,'-s',serial]
  def shell(code,limit=30):
-  # B28 adbd lacks shell -T and reliable remote exit propagation.
+  # Vendor adbd lacks shell -T and reliable remote exit propagation.
   script="set -e\ntrap 'r=$?; printf \"\\n__U60_RC__=%s\\n\" \"$r\"' EXIT\n"+code+'\nexit 0\n'
   result=subprocess.run(adb+['exec-out','sh','-c',script],text=True,capture_output=True,timeout=limit)
   marker=re.search(r'\n__U60_RC__=(\d+)\s*$',result.stdout)
@@ -46,7 +47,12 @@ def main():
   return result.stdout[:marker.start()]
  # Bind the selected device to the expected firmware before any package upload.
  fw=shell("ubus -t 5 call zwrt_zte_mdm.api get_zwrt_common_info '{}' | jsonfilter -e '@.wa_inner_version'").strip()
- if fw!='BD_FLYMODEMMU5250V1.0.0B28':raise SystemExit('Target is not the supported mainland B28 firmware')
+ firmware={'B28':'BD_FLYMODEMMU5250V1.0.0B28','B31':'BD_CNMU5250V1.0.0B31'}[match[1]]
+ if fw!=firmware:raise SystemExit('Target firmware does not match the prepared package')
+ identity=shell("ubus -t 5 call zwrt_web device_info '{}' | jsonfilter -e '@.imei'").strip()
+ expected_identity=(ROOT/'TARGET-IDENTITY-SHA256').read_text().strip()
+ if not re.fullmatch(r'[0-9]{15}',identity) or not re.fullmatch(r'[0-9a-f]{64}',expected_identity) or hashlib.sha256(b'u60-imei-v1:'+identity.encode()).hexdigest()!=expected_identity:
+  raise SystemExit('Target identity does not match the prepared package')
  if a.action in ['install','check']:
   shell('mkdir -p /data/u60-packages\nchmod 700 /data/u60-packages\n[ ! -L '+remote+' ]\nmkdir -p '+remote+'\nchmod 700 '+remote)
   # Directory contents only; no workstation config, credential or Tailscale state is added.

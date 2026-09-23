@@ -2,7 +2,7 @@
 
 中兴 U60 Pro（MU5250）国行原厂系统上的**屏幕 UI + 原厂网页版增强**。保留中兴系统、基带、Wi-Fi 驱动和原厂界面，不是 OpenWrt 固件，也不是整机刷机包。
 
-**当前安装包为 [v0.1.3-experimental](https://github.com/defilippisprafka-netizen/u60-pro-enhanced/releases/tag/v0.1.3-experimental)，已包含海雾玻璃主题、五菜单图标、休眠后误退回原厂修复，以及双热点中继。** 仅接受国行 B28、Linux 5.15.185-perf、ARM64，且原厂文件指纹一致的设备。B27、港版/国际版和其他固件未做验证。开发机的功能验证不等于第二台全新设备已安装验收；首次安装流程目前经过模拟测试，尚未在第二台实机验证。不能接受网络中断或手动恢复操作的用户，请暂缓安装。
+准备工具分别校验国行 B28（`BD_FLYMODEMMU5250V1.0.0B28`、Linux `5.15.185-perf`）与国行 B31（`BD_CNMU5250V1.0.0B31`、Linux `5.15.194-perf`）的原厂文件指纹，并拒绝未知固件或错配安装包。B28 保持现有启动行为。B31 已在一台实机验证增强屏幕、双击电源键双向切换和网页静态资源；USB 网口、Wi-Fi 中继、待机维护与代理路由仍须分别验收，B31 首阶段不自动启动这些网络协调服务。它不是通用插件商店，也不提供 OpenWrt 固件或 LuCI。B28 的测试结果不代表 B31 的实机验收结果。
 
 
 ## 相比原厂增加了什么
@@ -45,11 +45,11 @@
 - [回退](docs/RECOVERY.md)：保留原厂启动文件，不抹除用户配置。
 - [社区来源与许可证](THIRD_PARTY_NOTICES.md)。
 
-从 [v0.1.3 Release](https://github.com/defilippisprafka-netizen/u60-pro-enhanced/releases/tag/v0.1.3-experimental) 下载 [安装包](https://github.com/defilippisprafka-netizen/u60-pro-enhanced/releases/download/v0.1.3-experimental/u60-pro-enhanced-v0.1.3-experimental.tar.gz)，核对同页 [SHA256SUMS.txt](https://github.com/defilippisprafka-netizen/u60-pro-enhanced/releases/download/v0.1.3-experimental/SHA256SUMS.txt)。GitHub 的自动 Source code 包是源码，不含编译程序；需要自行构建。
+上游 [v0.1.3 Release](https://github.com/defilippisprafka-netizen/u60-pro-enhanced/releases/tag/v0.1.3-experimental) 仅支持 B28。对于增加 B31 支持的版本，从源码构建后运行准备工具，生成与目标设备固件和身份绑定的本地安装目录。B28 包不能安装到 B31，反之亦然。
 
-安装包没有任何现成节点、订阅、密码、Tailscale 身份、SSH 私钥或开发机配置。首次默认直连、普通待机、USB LAN；保留目标机原有 Wi-Fi 频段设置。**不会替你升级固件、解锁 ADB 或创建云端账户。** 需要用户自己完成设备解锁及配置。
+安装包没有任何现成节点、订阅、密码、Tailscale 身份、SSH 私钥或开发机配置。B31 首次保持直连，不自动接管现有 Wi-Fi、USB 网口或代理路由；B28 保持上游默认行为。**不会升级固件、解锁 ADB 或创建云端账户。**
 
-原厂网页和字体不再分发：准备工具在 USB 连接时，从目标设备读取三份固定的原厂静态网页文件，验证指纹后生成本地覆盖层；安装不改写原厂网页分区。Mihomo、Tailscale 和规则数据从各自官方来源下载，固定版本及 SHA-256 见 `packaging/dependencies.json`。准备目录只留在自己的电脑，**不要上传或转发**。
+原厂网页和字体不再分发：准备工具在 USB 连接时，从目标设备读取固件号、设备标识及三份固定的原厂静态网页文件，验证指纹后生成仅绑定本机的安装目录；包内只保存设备标识摘要，不保存明文 IMEI。安装不改写原厂网页分区。Mihomo、Tailscale 和规则数据从各自官方来源下载，固定版本及 SHA-256 见 `packaging/dependencies.json`。准备目录只留在自己的电脑，**不要上传或转发**。
 
 ## 从源码构建
 

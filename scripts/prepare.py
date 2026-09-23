@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Prepare a device-specific installer locally. Never publish the prepared folder."""
-import argparse,gzip,hashlib,io,json,pathlib,re,shutil,subprocess,tarfile,urllib.request
+import argparse,datetime,gzip,hashlib,io,json,pathlib,re,shutil,subprocess,tarfile,urllib.request
 ROOT=pathlib.Path(__file__).resolve().parent
+FIRMWARE={b'BD_FLYMODEMMU5250V1.0.0B28':'B28',b'BD_CNMU5250V1.0.0B31':'B31'}
 WEB={'index.html':('<ul class="main-navigation-list">','<ul class="main-navigation-list">\n<li class="navigation-drawer -u60-enhanced"><a href="#u60_enhanced" class="parent-link link">增强功能</a></li>'),
  'js/main.js':('require.config({paths:','require.config({urlArgs:"u60=20260922-8",paths:'),
  'js/config/ufi/U60Pro/menu.js':('return[','return[{hash:"#u60_enhanced",path:"auth/u60-enhanced",requireLogin:!0,checkSIMStatus:!1},')}
@@ -38,8 +39,8 @@ def download(spec):
  with urllib.request.urlopen(spec['url'],timeout=120) as response:data=response.read(200_000_001)
  if len(data)>200_000_000 or sha(data)!=spec['sha256']:raise ValueError('Dependency checksum mismatch')
  return data
-def write(root,name,data,executable=False):
- p=root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(data);p.chmod(0o700 if executable else 0o600)
+def write(root,name,data,executable=False,public=False):
+ p=root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(data);p.chmod(0o700 if executable else 0o644 if public else 0o600)
 def manifest(root):
  (root/'SHA256SUMS').write_text(''.join(sha(p.read_bytes())+'  '+p.relative_to(root).as_posix()+'\n' for p in sorted(root.rglob('*')) if p.is_file() and p.name!='SHA256SUMS'))
 def main():
@@ -55,16 +56,26 @@ def main():
  adb=[a.adb,'-s',serial,'exec-out']
  # These are fixed read-only paths. No credentials, account state or configuration is read.
  fw=subprocess.check_output(adb+['sh','-c',"ubus -t 5 call zwrt_zte_mdm.api get_zwrt_common_info '{}' | jsonfilter -e '@.wa_inner_version'"],timeout=15).strip()
- if fw!=b'BD_FLYMODEMMU5250V1.0.0B28':p.error('Only mainland B28 is supported')
+ variant=FIRMWARE.get(fw)
+ if not variant:p.error('Only the verified mainland B28 and B31 firmware is supported')
+ imei=subprocess.check_output(adb+['sh','-c',"ubus -t 5 call zwrt_web device_info '{}' | jsonfilter -e '@.imei'"],timeout=15).strip()
+ if not re.fullmatch(rb'[0-9]{15}',imei):p.error('Cannot bind package to a valid device identity')
  stock={}
- for line in (ROOT/'factory-web.sha256').read_text().splitlines():
+ web_manifest=ROOT/('factory-web.sha256' if variant=='B28' else 'factory-web-B31.sha256')
+ for line in web_manifest.read_text().splitlines():
   h,n=line.split('  ',1)
   if n not in WEB:raise ValueError('Unexpected web source')
   stock[n]=patch_web(n,subprocess.check_output(adb+['cat','/usr/zte_web/web/'+n],timeout=15),h)
  output=a.output.resolve();shutil.copytree(ROOT/'installer',output);output.chmod(0o700)
  try:
   data_root=output/'payload/data'
-  for n,data in stock.items():write(data_root/'u60-web/public',n,data)
+  write(output,'FACTORY-SHA256SUMS',(ROOT/('FACTORY-SHA256SUMS' if variant=='B28' else 'FACTORY-SHA256SUMS-B31')).read_bytes())
+  release_time=datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d-%H%M%S')
+  write(output,'RELEASE-ID',('u60-pro-'+variant+'-'+release_time+'\n').encode())
+  write(output,'TARGET-IDENTITY-SHA256',(sha(b'u60-imei-v1:'+imei)+'\n').encode())
+  write(data_root/'u60-web','factory.sha256',web_manifest.read_bytes())
+  if variant=='B31':write(data_root/'u60-panel','compat-mode',b'b31-ui-first\n')
+  for n,data in stock.items():write(data_root/'u60-web/public',n,data,public=True)
   for name,spec in json.loads((ROOT/'dependencies.json').read_text()).items():
    print('Downloading and verifying '+name,flush=True);data=download(spec)
    if spec['format']=='tailscale-tar':

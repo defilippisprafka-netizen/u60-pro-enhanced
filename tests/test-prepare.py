@@ -3,6 +3,10 @@ import hashlib,importlib.util,pathlib,tempfile,unittest
 R=pathlib.Path(__file__).resolve().parents[1]
 s=importlib.util.spec_from_file_location('prepare',R/'scripts/prepare.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
 class Preparation(unittest.TestCase):
+ def test_only_the_two_fingerprinted_firmware_variants_are_accepted(self):
+  self.assertEqual(m.FIRMWARE[b'BD_FLYMODEMMU5250V1.0.0B28'],'B28')
+  self.assertEqual(m.FIRMWARE[b'BD_CNMU5250V1.0.0B31'],'B31')
+  self.assertNotIn(b'BD_CNMU5250V1.0.0B27',m.FIRMWARE)
  def test_stock_patch_and_auth_route(self):
   examples={'index.html':b'<ul class="main-navigation-list"><li>stock<ul><li>nested</li></ul></li></ul><script data-main="js/main">','js/main.js':b'require.config({paths:abc','js/config/ufi/U60Pro/menu.js':b'define(function(){return[abc'}
   for name,data in examples.items():

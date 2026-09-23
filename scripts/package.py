@@ -7,7 +7,7 @@ VERSION='v0.1.3-experimental';out=R/'dist'/('u60-pro-enhanced-'+VERSION)
 if out.exists():raise SystemExit('Release directory exists; inspect it before rebuilding')
 out.mkdir(parents=True)
 for n in ['prepare.py']:shutil.copyfile(R/'scripts'/n,out/n)
-for n in ['dependencies.json','factory-web.sha256']:shutil.copyfile(R/'packaging'/n,out/n)
+for n in ['dependencies.json','factory-web.sha256','factory-web-B31.sha256','FACTORY-SHA256SUMS','FACTORY-SHA256SUMS-B31']:shutil.copyfile(R/'packaging'/n,out/n)
 shutil.copyfile(R/'README.md',out/'README.md')
 shutil.copytree(R/'docs',out/'docs');shutil.copytree(R/'licenses',out/'licenses')
 for n in ['LICENSE','THIRD_PARTY_NOTICES.md']:shutil.copyfile(R/n,out/n)
@@ -26,7 +26,6 @@ for n,target,command in [('start.sh',clash,'network-profile.sh clash-start'),('t
 for n in ['setup-clash.sh','setup-tailscale.sh']:
  shutil.copyfile(R/'scripts/portable'/n,panel/n);(panel/n).chmod(0o700)
 web=data/'u60-web';shutil.copyfile(R/'web/factory/mount.sh',web/'mount.sh');(web/'mount.sh').chmod(0o700)
-shutil.copyfile(R/'packaging/factory-web.sha256',web/'factory.sha256')
 for local,remote in [('u60-web-advanced.js','js/u60-web-advanced.js'),('u60-enhanced.js','js/auth/u60-enhanced.js'),('u60-web-model.js','js/u60-web-model.js'),('u60-enhanced.html','tmpl/auth/u60-enhanced.html')]:
  dest=web/'public'/remote;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(R/'web/factory'/local,dest)
 (web/'public/u60-extension-version.txt').write_text('20260922-8\n')
@@ -35,7 +34,6 @@ for local,remote in [('usb-isolate','u60-usb-isolate'),('usb-role','u60-usb-role
  shutil.copyfile(R/'panel'/(local+'-init.sh'),p/'init'/remote);(p/'init'/remote).chmod(0o700)
 shutil.copyfile(R/'scripts/portable/portable-boot.sh',p/'boot/portable-boot.sh')
 for n in ['check-device.sh','install-new-device.sh','restore-boot.sh','deploy-from-computer.py']:shutil.copyfile(R/'scripts/portable'/n,i/n)
-shutil.copyfile(R/'packaging/FACTORY-SHA256SUMS',i/'FACTORY-SHA256SUMS');(i/'RELEASE-ID').write_text('u60-pro-B28-20260923-180000\n')
 m.manifest(out);m.verify(out)
 archive=out.parent/(out.name+'.tar.gz')
 with tarfile.open(archive,'w:gz') as tar:

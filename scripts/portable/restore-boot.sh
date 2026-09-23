@@ -5,7 +5,7 @@ umask 077
 cd "$(dirname "$0")"
 sha256sum -c SHA256SUMS >/dev/null
 ID=$(cat RELEASE-ID)
-case "$ID" in u60-pro-B28-[0-9]*) ;; *) exit 2;; esac
+case "$ID" in u60-pro-B28-[0-9]*|u60-pro-B31-[0-9]*) ;; *) exit 2;; esac
 case "$ID" in *[!a-zA-Z0-9-]*) exit 2;; esac
 BACKUP="/data/u60-install-backups/$ID"
 [ "$(cat "$BACKUP/release-id")" = "$ID" ]

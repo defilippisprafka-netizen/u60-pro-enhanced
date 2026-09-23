@@ -17,6 +17,7 @@ NOANIM_DIR="${NOANIM_DIR:-/tmp/u60-noanim}"
 BOOT_DONE="${BOOT_DONE:-/tmp/zte_boot_done}"
 REBOOT_FILE="${REBOOT_FILE:-/tmp/touchui_reboot_file}"
 LCD_SAVED=""
+MTDEV_ORIGINAL=0
 CHILD=""
 WD=""
 OWNER="$$"
@@ -102,7 +103,7 @@ restore_factory() {
 	else
 		log "factory process not visible before restore timeout"
 	fi
-	if ! pidof mtdev2tuio >/dev/null 2>&1 && [ -x /usr/bin/mtdev2tuio ]; then
+	if [ "$MTDEV_ORIGINAL" = 1 ] && ! pidof mtdev2tuio >/dev/null 2>&1 && [ -x /usr/bin/mtdev2tuio ]; then
 		mtdev2tuio /dev/input/event3 osc.udp://127.0.0.1:3333/ >/dev/null 2>&1 &
 	fi
 }
@@ -180,6 +181,7 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 
 [ -r "$LCD_BL" ] && LCD_SAVED=$(cat "$LCD_BL" 2>/dev/null || echo 0)
+if pidof mtdev2tuio >/dev/null 2>&1; then MTDEV_ORIGINAL=1; fi
 stop_factory || exit 1
 set_bl 255
 uptime_s > "$HB"

@@ -10,13 +10,13 @@ fail() { echo "$1" >&2;exit 1; }
 sha256sum -c SHA256SUMS >/dev/null || fail 'Package checksum failed'
 sh ./check-device.sh
 if [ "$ACTION" = check ];then
- echo 'PASS: B28 compatibility, package and factory dependencies verified'
+ echo 'PASS: firmware compatibility, package and factory dependencies verified'
  if [ -e /data/u60-panel ] || [ -e /data/u60-clash ] || [ -e /data/tailscale ];then echo 'Existing project files detected; --install will refuse to overwrite them';
  else echo 'Compatible target; --install additionally validates empty directories and the stock boot layout before writing';fi
  exit 0
 fi
 ID=$(cat RELEASE-ID)
-case "$ID" in u60-pro-B28-[0-9]* ) ;; *) fail 'Invalid release id';; esac
+case "$ID" in u60-pro-B28-[0-9]*|u60-pro-B31-[0-9]* ) ;; *) fail 'Invalid release id';; esac
 case "$ID" in *[!a-zA-Z0-9-]*) fail 'Invalid release id';; esac
 BACKUP="/data/u60-install-backups/$ID"
 if [ "$ACTION" = --start ];then
@@ -74,6 +74,9 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 cp -R payload/data/. "$STAGE/"
 cp payload/boot/portable-boot.sh "$STAGE/u60-panel/portable-boot.sh"
+chmod 755 "$STAGE/u60-web"
+find "$STAGE/u60-web/public" -type d -exec chmod 755 '{}' \;
+find "$STAGE/u60-web/public" -type f -exec chmod 644 '{}' \;
 printf '%s\n' "$ID" > "$STAGE/u60-panel/portable-release"
 chmod 700 "$STAGE/u60-panel/portable-boot.sh"
 awk '{if ($0 == "exit 0") print "(/data/u60-panel/portable-boot.sh) &";print}' /etc/rc.local > "$STAGE/rc.local"
@@ -89,8 +92,10 @@ for name in u60-usb-isolate u60-usb-role u60-wifi-relay u60-standby u60-web;do
  chmod 700 "/etc/init.d/$name.portable-next"
  mv "/etc/init.d/$name.portable-next" "/etc/init.d/$name"
 done
-/etc/init.d/u60-usb-isolate enable
-/etc/init.d/u60-usb-role enable
+if [ ! -e /data/u60-panel/compat-mode ];then
+ /etc/init.d/u60-usb-isolate enable
+ /etc/init.d/u60-usb-role enable
+fi
 /etc/init.d/u60-web enable
 chmod 755 "$STAGE/rc.local"
 mv "$STAGE/rc.local" /etc/rc.local

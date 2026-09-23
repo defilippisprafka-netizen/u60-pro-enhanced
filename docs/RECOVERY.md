@@ -1,6 +1,6 @@
 # 回退与保留数据
 
-先双击电源切回原厂屏幕。切回屏幕不会停止网络扩展；需要完全回退启动项时用 USB 直连，进入此前本机准备的 `u60-prepared-private` 目录：
+先双击电源切回原厂屏幕。切回屏幕不会停止网络扩展；需要完全回退启动项时用 USB 直连，进入该设备安装时使用的同一版本 `u60-prepared-private` 目录：
 
 ```sh
 python3 deploy-from-computer.py restore-boot

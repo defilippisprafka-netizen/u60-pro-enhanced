@@ -26,7 +26,8 @@ class PortableInstall(unittest.TestCase):
   self.put(self.target/'etc/rc.local',self.oldrc)
   self.put(self.target/'factory-file','factory ABI fixture')
   self.put(self.pkg/'FACTORY-SHA256SUMS',self.sum(self.target/'factory-file')+'  '+str(self.target/'factory-file')+'\n')
-  self.put(self.pkg/'RELEASE-ID','u60-pro-B28-20260921-150000\n')
+  self.put(self.pkg/'RELEASE-ID','u60-pro-B31-20260921-150000\n')
+  self.put(self.pkg/'TARGET-IDENTITY-SHA256',hashlib.sha256(b'u60-imei-v1:123456789012345').hexdigest()+'\n')
   for f in ['install-new-device.sh','restore-boot.sh','check-device.sh']:
    code=(ROOT/'scripts/portable'/f).read_text()
    for prefix in ['/data/','/etc/','/sys/','/dev/dri/','/dev/net/']:
@@ -38,6 +39,9 @@ class PortableInstall(unittest.TestCase):
   for d in ['data/u60-panel','data/u60-clash','data/tailscale/bin','data/u60-web','init','boot']:(payload/d).mkdir(parents=True,exist_ok=True)
   self.put(payload/'data/u60-panel/u60-panel','#!/bin/sh\nexit 0\n')
   self.put(payload/'data/u60-panel/panel-autostart.sh','#!/bin/sh\ntouch "'+str(self.target/'started')+'"\n')
+  self.put(payload/'data/u60-panel/compat-mode','b31-ui-first\n')
+  (payload/'data/u60-web/public').mkdir(parents=True)
+  self.put(payload/'data/u60-web/public/index.html','<html>fixture</html>\n')
   self.put(payload/'data/u60-panel/network-profile','direct\n')
   self.put(payload/'data/u60-panel/tailscale-lan','0\n')
   self.put(payload/'data/u60-clash/mihomo','#!/bin/sh\nexit 0\n')
@@ -53,13 +57,15 @@ esac
   for name in ['id','uname','df','ubus','jsonfilter','uci','curl','flock','ip','iptables','ip6tables','ebtables','hostapd_cli','start-stop-daemon']:
    code='#!/bin/sh\nexit 0\n'
    if name=='id':code='#!/bin/sh\necho 0\n'
-   if name=='uname':code='#!/bin/sh\n[ "$1" != -m ] || { echo aarch64;exit; };echo 5.15.185-perf\n'
+   if name=='uname':code='#!/bin/sh\n[ "$1" != -m ] || { echo aarch64;exit; };echo 5.15.194-perf\n'
    if name=='df':code='#!/bin/sh\nif [ -n "${WRAPPED_DF:-}" ];then echo long-device-name;echo "2000000 200000 1800000 10% /data";else echo "dev 2000000 200000 1800000 10% /data";fi\n'
-   if name=='jsonfilter':code='#!/bin/sh\ncat >/dev/null\necho "${FAKE_FW:-BD_FLYMODEMMU5250V1.0.0B28}"\n'
+   if name=='jsonfilter':code='#!/bin/sh\ncat >/dev/null\ncase "$*" in *@.imei*) echo "${FAKE_IMEI:-123456789012345}";; *) echo "${FAKE_FW:-BD_CNMU5250V1.0.0B31}";; esac\n'
    self.put(self.tools/name,code)
   self.put(self.tools/'sha256sum','''#!/usr/bin/env python3
 import hashlib,pathlib,sys
-if sys.argv[1]=='-c':
+if len(sys.argv)==1:
+ print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest()+'  -')
+elif sys.argv[1]=='-c':
  for line in pathlib.Path(sys.argv[2]).read_text().splitlines():
   h,p=line.split('  ',1)
   if not pathlib.Path(p).is_file() or hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()!=h:sys.exit(1)
@@ -89,8 +95,27 @@ exec /bin/mv "$@"
   r=self.run_install('--install');self.assertEqual(r.returncode,0,r.stdout+r.stderr)
   rc=(self.target/'etc/rc.local').read_text();self.assertIn('# factory preserved',rc);self.assertEqual(rc.count('portable-boot.sh'),1)
   self.assertEqual((self.target/'data/u60-panel/network-profile').read_text(),'direct\n')
+  self.assertEqual((self.target/'data/u60-panel/compat-mode').read_text(),'b31-ui-first\n')
+  self.assertEqual([p.name for p in (self.target/'etc/rc.d').iterdir()],['S99u60-web'])
+  self.assertEqual((self.target/'data/u60-web').stat().st_mode & 0o777,0o755)
+  self.assertEqual((self.target/'data/u60-web/public').stat().st_mode & 0o777,0o755)
+  self.assertEqual((self.target/'data/u60-web/public/index.html').stat().st_mode & 0o777,0o644)
   self.assertFalse((self.target/'started').exists());self.assertFalse((self.target/'data/tailscale/tailscaled.state').exists());self.assertFalse((self.target/'data/u60-clash/config.yaml').exists())
   r=self.run_install('--install');self.assertNotEqual(r.returncode,0);self.assertEqual(rc,(self.target/'etc/rc.local').read_text())
+ def test_b28_keeps_original_service_startup(self):
+  self.put(self.pkg/'RELEASE-ID','u60-pro-B28-20260921-150000\n')
+  (self.pkg/'payload/data/u60-panel/compat-mode').unlink()
+  self.put(self.tools/'uname','#!/bin/sh\n[ "$1" != -m ] || { echo aarch64;exit; };echo 5.15.185-perf\n')
+  self.hash_package()
+  r=self.run_install('--install',env=dict(self.env,FAKE_FW='BD_FLYMODEMMU5250V1.0.0B28'))
+  self.assertEqual(r.returncode,0,r.stdout+r.stderr)
+  self.assertEqual(sorted(p.name for p in (self.target/'etc/rc.d').iterdir()),['S99u60-usb-isolate','S99u60-usb-role','S99u60-web'])
+ def test_cross_firmware_package_refused_before_write(self):
+  r=self.run_install('--install',env=dict(self.env,FAKE_FW='BD_FLYMODEMMU5250V1.0.0B28'))
+  self.assertNotEqual(r.returncode,0);self.assert_stock()
+ def test_other_device_refused_before_write(self):
+  r=self.run_install('--install',env=dict(self.env,FAKE_IMEI='999999999999999'))
+  self.assertNotEqual(r.returncode,0);self.assert_stock()
  def test_mismatched_firmware_rejected_before_write(self):
   r=self.run_install('--install',env=dict(self.env,FAKE_FW='B27'));self.assertNotEqual(r.returncode,0);self.assert_stock()
  def test_usb_disconnected_rejected_before_write(self):
