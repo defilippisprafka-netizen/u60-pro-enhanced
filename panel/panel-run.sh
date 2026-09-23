@@ -126,13 +126,27 @@ stop_watchdog() {
 }
 start_watchdog() {
 	(
+		# The panel heartbeat uses CLOCK_MONOTONIC (suspend excluded), while
+		# /proc/uptime includes suspend. Comparing their absolute values
+		# falsely kills a healthy panel after deep sleep. Observe progress
+		# instead: nine unchanged checks allow ~27 awake seconds to recover.
+		# Suspended time does not accumulate checks, but a truly stuck UI
+		# still triggers the existing retry/factory fallback.
+		last_hb=""
+		stale_checks=0
 		sleep 4
 		while [ -f "$LOCK" ]; do
-			now=$(uptime_s); hb=$(cat "$HB" 2>/dev/null || echo 0)
-			case "$hb" in ''|*[!0-9]*) hb=0 ;; esac
-			age=$((now - hb))
-			if [ "$age" -lt 0 ] || [ "$age" -gt 25 ]; then
-				log "watchdog: monotonic heartbeat stale age=${age}s"
+			hb=$(cat "$HB" 2>/dev/null || true)
+			case "$hb" in
+				''|*[!0-9]*) stale_checks=$((stale_checks + 1)) ;;
+				*) if [ "$hb" = "$last_hb" ]; then
+					stale_checks=$((stale_checks + 1))
+				else
+					last_hb="$hb"; stale_checks=0
+				fi ;;
+			esac
+			if [ "$stale_checks" -ge 9 ]; then
+				log "watchdog: heartbeat not advancing checks=$stale_checks"
 				: > "$WD_MARK"
 				pid=$(cat "$LOCK" 2>/dev/null || true)
 				[ -n "$pid" ] && kill "$pid" 2>/dev/null || true
