@@ -7,8 +7,10 @@
 #ifndef PANEL_THEME_FILE
 #define PANEL_THEME_FILE "/data/u60-panel/theme"
 #endif
-static int panel_theme_id(const char *name){return name&&!strcmp(name,"paper")?1:name&&!strcmp(name,"classic")?0:-1;}
-static const char *panel_theme_name(int id){return id==1?"纸白蓝":"曜石彩卡";}
+#define PANEL_THEME_COUNT 3
+static const char *panel_theme_key(int id){static const char*keys[]={"classic","paper","seaglass"};return id>=0&&id<PANEL_THEME_COUNT?keys[id]:keys[0];}
+static int panel_theme_id(const char *name){for(int i=0;name&&i<PANEL_THEME_COUNT;i++)if(!strcmp(name,panel_theme_key(i)))return i;return -1;}
+static const char *panel_theme_name(int id){return id==2?"海雾玻璃":id==1?"纸白蓝":"曜石彩卡";}
 static int panel_theme_load(void){
  char b[24];FILE*f=fopen(PANEL_THEME_FILE,"r");if(!f)return 0;
  size_t n=fread(b,1,sizeof(b)-1,f);int complete=feof(f);fclose(f);if(!complete)return 0;
@@ -23,6 +25,6 @@ static int panel_theme_save(const char *name){
 }
 static cJSON *panel_theme_item(int id){
  cJSON*i=cJSON_CreateObject();cJSON_AddStringToObject(i,"id","theme");cJSON_AddStringToObject(i,"label","界面主题");cJSON_AddStringToObject(i,"value",panel_theme_name(id));cJSON_AddStringToObject(i,"type","choice");cJSON_AddStringToObject(i,"action","screen.theme");cJSON_AddBoolToObject(i,"enabled",1);cJSON_AddBoolToObject(i,"confirm",0);
- cJSON*ch=cJSON_AddArrayToObject(i,"choices");for(int n=0;n<2;n++){cJSON*c=cJSON_CreateObject();cJSON_AddStringToObject(c,"label",panel_theme_name(n));cJSON*args=cJSON_AddObjectToObject(c,"args");cJSON_AddStringToObject(args,"theme",n?"paper":"classic");cJSON_AddItemToArray(ch,c);}return i;
+ cJSON*ch=cJSON_AddArrayToObject(i,"choices");for(int n=0;n<PANEL_THEME_COUNT;n++){cJSON*c=cJSON_CreateObject();cJSON_AddStringToObject(c,"label",panel_theme_name(n));cJSON*args=cJSON_AddObjectToObject(c,"args");cJSON_AddStringToObject(args,"theme",panel_theme_key(n));cJSON_AddItemToArray(ch,c);}return i;
 }
 #endif

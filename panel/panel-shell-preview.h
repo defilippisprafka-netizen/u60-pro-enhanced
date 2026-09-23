@@ -74,7 +74,7 @@ static void shell_preview_statusbar(struct drm_buf*b,const char*dir){
  const int battery_values[]={-1,0,1,15,86,100,101};
  for(int i=0;i<7;i++){cJSON_ReplaceItemInObject(d,"battery",battery_values[i]<0?cJSON_CreateNull():cJSON_CreateNumber(battery_values[i]));cJSON_ReplaceItemInObject(signal,"value",i==0||i==6?cJSON_CreateNull():cJSON_CreateNumber(i==1?0:i==2?1:i==3?2:5));shell_render(b,&a);shell_preview_hits(&a);sh_statusbar(b,&a,at);
   int lit=0;for(int y=14;y<30;y++)for(int x=282;x<305;x++)if(b->map[y*320+x]==SH_CYAN)lit++;assert(lit==(i==0||i==1||i==6?0:i==2?12:i==3?33:150));
-  for(int y=0;y<44;y++)for(int x=274;x<282;x++)assert(b->map[y*320+x]==SH_BG);
+  for(int y=0;y<44;y++)for(int x=274;x<282;x++)assert(b->map[y*320+x]==(sh_theme==2?sh_glass_bg[y*320+x]:SH_BG));
   shell_preview_write(b,dir,82+i);
  }
  cJSON_ReplaceItemInObject(d,"battery",cJSON_CreateString("100"));assert(sh_status_value(sh_get(d,"battery"),100)==100);shell_render(b,&a);memcpy(before,b->map,sizeof(before));cJSON_ReplaceItemInObject(d,"battery",cJSON_CreateNumber(100));shell_render(b,&a);assert(shell_preview_same_region(b,before,200,0,284,44));
@@ -84,7 +84,7 @@ static void shell_preview_usb_badge(struct drm_buf*b,const char*dir){
  struct app a;shell_preview_fixture(&a);cJSON*d=sh_get(a.shell.snapshot,"data");
  cJSON*usb=cJSON_AddObjectToObject(d,"usb");cJSON_AddStringToObject(usb,"badge","");
  uint16_t before[320*480];time_t now=time(NULL);const char*values[]={"WAN","LAN","WAIT","ERROR",""};
- for(int theme=0;theme<2;theme++){
+ for(int theme=0;theme<PANEL_THEME_COUNT;theme++){
   sh_theme=theme;shell_render(b,&a);sh_statusbar(b,&a,now);memcpy(before,b->map,sizeof(before));
   for(int n=0;n<5;n++){
    cJSON_ReplaceItemInObject(usb,"badge",cJSON_CreateString(values[n]));sh_statusbar(b,&a,now);
@@ -93,7 +93,7 @@ static void shell_preview_usb_badge(struct drm_buf*b,const char*dir){
    shell_preview_write(b,dir,110+theme*5+n);
   }
  }
- sh_theme=0;cJSON_Delete(a.shell.snapshot);puts("PASS: USB WAN/LAN/wait/error badge confined left of battery in both themes");
+ sh_theme=0;cJSON_Delete(a.shell.snapshot);puts("PASS: USB WAN/LAN/wait/error badge confined left of battery in all themes");
 }
 static void shell_preview_battery_power(struct drm_buf*b,const char*dir){
  assert(battery_power_effective("Charging","sink",1,1)==BP_INPUT_IDLE);
@@ -112,7 +112,7 @@ static void shell_preview_battery_power(struct drm_buf*b,const char*dir){
   sh_statusbar(b,&a,now);assert(shell_preview_same_region(b,before,0,0,238,480));assert(shell_preview_same_region(b,before,272,0,320,480));
   if(i<2)assert(!shell_preview_same_region(b,before,239,16,271,28));
   else assert(shell_preview_same_region(b,before,238,0,272,44));
-  for(int y=0;y<44;y++)for(int x=230;x<238;x++)assert(b->map[y*320+x]==SH_BG);
+  for(int y=0;y<44;y++)for(int x=230;x<238;x++)assert(b->map[y*320+x]==(sh_theme==2?sh_glass_bg[y*320+x]:SH_BG));
   if(i<4)shell_preview_write(b,dir,89+i);
  }
  /* Snapshot refreshes cannot replace local power telemetry. */
@@ -120,13 +120,13 @@ static void shell_preview_battery_power(struct drm_buf*b,const char*dir){
   * Compare outside the body across capacity/theme/direction changes. */
  const int capacities[]={0,1,86,100};
  cJSON*d=sh_get(a.shell.snapshot,"data");cJSON*usb=cJSON_AddObjectToObject(d,"usb");cJSON_AddStringToObject(usb,"badge","WAN");
- for(int theme=0;theme<2;theme++)for(int value=0;value<4;value++)for(int state=0;state<3;state++){
+ for(int theme=0;theme<PANEL_THEME_COUNT;theme++)for(int value=0;value<4;value++)for(int state=0;state<3;state++){
   sh_theme=theme;a.battery_power=state==0?BP_CHARGING:state==1?BP_OUTPUT:BP_BATTERY;
   cJSON_ReplaceItemInObject(d,"battery",cJSON_CreateNumber(capacities[value]));
   char digits[8];snprintf(digits,sizeof(digits),"%d",capacities[value]);assert(text_width(digits,14)+7<=30);
   shell_render(b,&a);sh_statusbar(b,&a,now);
-  for(int y=0;y<44;y++)for(int x=230;x<238;x++)assert(b->map[y*320+x]==SH_BG);
-  for(int y=0;y<44;y++)for(int x=274;x<282;x++)assert(b->map[y*320+x]==SH_BG);
+  for(int y=0;y<44;y++)for(int x=230;x<238;x++)assert(b->map[y*320+x]==(sh_theme==2?sh_glass_bg[y*320+x]:SH_BG));
+  for(int y=0;y<44;y++)for(int x=274;x<282;x++)assert(b->map[y*320+x]==(sh_theme==2?sh_glass_bg[y*320+x]:SH_BG));
   shell_preview_write(b,dir,130+theme*12+value*3+state);
  }
  sh_theme=0;
@@ -155,7 +155,7 @@ static void shell_preview_reports(struct drm_buf*b,const char*dir){
  struct app a;shell_preview_fixture(&a);a.shell.tab=4;shell_render(b,&a);shell_preview_hits(&a);shell_preview_write(b,dir,20);
  shell_pointer(&a,150,350,1,0);shell_pointer(&a,150,150,1,0);shell_pointer(&a,150,150,0,1);assert(a.shell.menu_page>0);shell_render(b,&a);shell_preview_hits(&a);shell_preview_write(b,dir,21);
  shell_hit(&a,SH_SECTION+7);assert(!strcmp(a.shell.section,"diagnostics")&&a.shell.subpage);shell_hit(&a,SH_BACK);assert(!a.shell.subpage&&a.shell.menu_page>0);
- cJSON*r=cJSON_Parse("{\"title\":\"实际分流记录\",\"lines\":[\"设备：192.168.0.2\",\"目标：www.google.com\",\"规则：DomainSuffix\",\"匹配内容：google.com\",\"策略：示例分组A\",\"这是长内容分页测试，完整保留中文字符，不能在边界丢掉文字，也不能把正文裁切为短暂提示。\"]}");
+ cJSON*r=cJSON_Parse("{\"title\":\"实际分流记录\",\"lines\":[\"设备：192.168.0.2\",\"目标：www.google.com\",\"规则：DomainSuffix\",\"匹配内容：google.com\",\"策略：美国专线\",\"这是长内容分页测试，完整保留中文字符，不能在边界丢掉文字，也不能把正文裁切为短暂提示。\"]}");
  for(int n=0;n<20;n++)cJSON_AddItemToArray(sh_get(r,"lines"),cJSON_CreateString("通知正文仅保存在内存中，不写入日志。"));
  sh_show_report(&a,r);cJSON_Delete(r);assert(a.shell.modal==6&&cJSON_GetArraySize(a.shell.report_lines)>12);
  shell_render(b,&a);shell_preview_hits(&a);shell_preview_write(b,dir,22);shell_pointer(&a,150,350,1,0);shell_pointer(&a,150,150,1,0);shell_pointer(&a,150,150,0,1);assert(a.shell.report_page==200);shell_render(b,&a);shell_preview_hits(&a);shell_preview_write(b,dir,23);
@@ -176,7 +176,7 @@ static void shell_preview_schema(struct drm_buf*b,const char*dir){
  if(sh_section(&a,"battery")){
   sh_open_section(&a,"battery");cJSON*items=sh_get(sh_section(&a,"battery"),"items");
   for(int n=0;n<cJSON_GetArraySize(items);n++)if(!strcmp(sh_str(cJSON_GetArrayItem(items,n),"id",""),"menu.battery_details")){
-   for(int theme=0;theme<2;theme++){sh_theme=theme;a.shell.item_page=n*63;shell_render(b,&a);shell_preview_hits(&a);shell_preview_write(b,dir,180+theme*2);
+   for(int theme=0;theme<PANEL_THEME_COUNT;theme++){sh_theme=theme;a.shell.item_page=n*63;shell_render(b,&a);shell_preview_hits(&a);shell_preview_write(b,dir,180+theme*2);
     shell_hit(&a,SH_ITEM+n);assert(a.shell.modal==6&&cJSON_GetArraySize(a.shell.report_lines)>0);shell_render(b,&a);shell_preview_hits(&a);shell_preview_write(b,dir,181+theme*2);shell_hit(&a,SH_CANCEL);assert(!a.shell.modal);
    }sh_theme=0;break;
   }
@@ -216,20 +216,33 @@ static void shell_preview_readonly(struct drm_buf*b){
  cJSON*it=cJSON_GetArrayItem(sh_get(sh_section(&a,"wifi"),"items"),0);cJSON_AddBoolToObject(it,"enabled",0);shell_hit(&a,SH_ITEM);assert(!a.shell.modal);
  cJSON_Delete(a.shell.snapshot);puts("PASS: info and disabled rows have no hit or modal; editable controls remain reachable; stale hits recheck availability");
 }
+static void shell_preview_nav_icons(struct drm_buf*b){
+ struct app a;shell_preview_fixture(&a);
+ for(int theme=0;theme<PANEL_THEME_COUNT;theme++)for(int tab=0;tab<5;tab++){
+  sh_theme=theme;a.shell.tab=tab;shell_render(b,&a);
+  for(int icon=0;icon<5;icon++){
+   int pixels=0,group=icon==1?SH_NETWORK_COLOR:(icon==2||icon==3)?SH_SERVICE_COLOR:SH_DEVICE_COLOR;
+   uint16_t ink=tab==icon?sh_category_ink(group):SH_MUTED;
+   for(int y=439;y<458;y++)for(int x=icon*64+21;x<icon*64+43;x++)if(b->map[y*320+x]==ink)pixels++;
+   assert(pixels>25);int hit=0;for(int n=0;n<a.nhits;n++)if(a.hits[n].id==SH_TAB+icon){assert(a.hits[n].y0==433&&a.hits[n].y1==480);hit++;}assert(hit==1);
+  }
+ }
+ cJSON_Delete(a.shell.snapshot);sh_theme=0;puts("PASS: five visible native navigation icons with unchanged hit targets in every theme/tab");
+}
 static void shell_preview_theme_menu(struct drm_buf*b,const char*dir){
- for(int theme=0;theme<2;theme++){
+ for(int theme=0;theme<PANEL_THEME_COUNT;theme++){
   struct app a;shell_preview_fixture(&a);sh_theme=theme;panel_menu_layout(a.shell.snapshot);
-  for(int tab=0;tab<5;tab++){a.shell.tab=tab;a.shell.subpage=0;shell_render(b,&a);shell_preview_hits(&a);shell_preview_write(b,dir,160+theme*10+tab);}
+  for(int tab=0;tab<5;tab++){a.shell.tab=tab;a.shell.subpage=0;shell_render(b,&a);shell_preview_hits(&a);shell_preview_write(b,dir,300+theme*10+tab);}
   a.shell.tab=2;sh_open_section(&a,"clash");shell_render(b,&a);
   shell_hit(&a,SH_ITEM);assert(a.shell.modal==1&&!strcmp(sh_str(a.shell.draft,"action",""),"clash.mode"));shell_hit(&a,SH_CANCEL);
   shell_hit(&a,SH_ITEM+1);assert(a.shell.modal==1&&!strcmp(sh_str(a.shell.draft,"action",""),"clash.select"));shell_hit(&a,SH_CANCEL);
   shell_hit(&a,SH_ITEM+2);assert(!a.shell.modal);
   cJSON_Delete(a.shell.snapshot);
  }
- sh_theme=0;puts("PASS: both adjusted palettes, sorted rendered row to action mapping, readonly rows stay inert");
+ sh_theme=0;puts("PASS: all palettes, sorted rendered row to action mapping, readonly rows stay inert");
 }
 static void shell_preview_scroll_gestures(struct drm_buf*b,const char*dir){
- for(int theme=0;theme<2;theme++){
+ for(int theme=0;theme<PANEL_THEME_COUNT;theme++){
  sh_theme=theme;struct app a;shell_preview_fixture(&a);a.shell.tab=4;shell_render(b,&a);
  uint16_t before[320*480];memcpy(before,b->map,sizeof(before));
  shell_pointer(&a,130,350,1,0);shell_pointer(&a,130,300,1,0);shell_render(b,&a);shell_pointer(&a,130,180,1,0);shell_render(b,&a);shell_pointer(&a,130,180,0,1);
@@ -252,7 +265,7 @@ static void shell_preview_scroll_gestures(struct drm_buf*b,const char*dir){
  for(int i=0;i<10;i++){shell_pointer(&a,100,370,1,0);shell_pointer(&a,100,120,1,0);shell_pointer(&a,100,120,0,1);shell_render(b,&a);}
  assert(a.shell.field_page==a.shell.scroll_max);shell_preview_hits(&a);row=-1;for(int i=0;i<a.nhits;i++)if(a.hits[i].id==SH_FIELD+23)row=i;assert(row>=0);
  y=(a.hits[row].y0+a.hits[row].y1)/2;shell_pointer(&a,100,y,1,0);shell_pointer(&a,100,y,0,1);assert(a.shell.editor&&a.shell.field==23);shell_render(b,&a);assert(!a.shell.scroll_offset);sh_close(&a);cJSON_Delete(a.shell.snapshot);
- }sh_theme=0;puts("PASS: both themes gesture suppression, edge clipping, fixed chrome, remembered menu, last of 96 nodes, last of 24 fields");
+ }sh_theme=0;puts("PASS: all themes gesture suppression, edge clipping, fixed chrome, remembered menu, last of 96 nodes, last of 24 fields");
 }
 static int shell_preview_main(const char*dir){
  struct app a;struct drm_buf b={0};int page;
@@ -277,5 +290,5 @@ static int shell_preview_main(const char*dir){
  /* A new snapshot cannot destroy the open form or its unsaved edits. */
  shell_preview_fixture(&a);sh_open_item(&a,cJSON_GetArrayItem(sh_get(sh_section(&a,"wifi"),"items"),1));shell_hit(&a,SH_FIELD);shell_hit(&a,SH_KEY);assert(!strcmp(a.shell.values[0],"U60-PROa"));cJSON_Delete(a.shell.snapshot);a.shell.snapshot=cJSON_CreateObject();assert(!strcmp(a.shell.values[0],"U60-PROa"));assert(!strcmp(sh_str(a.shell.draft,"label",""),"无线名称与密码"));shell_hit(&a,SH_DONE);shell_hit(&a,SH_FIELD+2);assert(a.shell.modal==5);shell_hit(&a,SH_CHOICE);assert(!strcmp(a.shell.values[2],"2g"));assert(a.shell.modal==4);
  shell_hit(&a,SH_FIELD);memset(a.shell.values[0],'x',SHELL_VALUE_CAP-1);a.shell.values[0][SHELL_VALUE_CAP-1]=0;shell_hit(&a,SH_KEY);assert(strlen(a.shell.values[0])==SHELL_VALUE_CAP-1);strcpy(a.shell.values[0],"中文");shell_hit(&a,SH_DELETE);assert(!strcmp(a.shell.values[0],"中"));shell_hit(&a,SH_DONE);shell_hit(&a,SH_CANCEL);assert(!a.shell.draft);cJSON_Delete(a.shell.snapshot);
- shell_preview_scroll_gestures(&b,dir);shell_preview_theme_menu(&b,dir);shell_preview_search_tests(&b,dir);shell_preview_reports(&b,dir);shell_preview_schema(&b,dir);free(b.map);puts("PASS: 20 native shell states; nonoverlapping hits; draft isolation; 96-choice search, region aliases, scrolling, refreshed snapshot selection args, cancel/clear, field choice mapping, UTF-8 and buffer bounds");return 0;
+ shell_preview_nav_icons(&b);shell_preview_scroll_gestures(&b,dir);shell_preview_theme_menu(&b,dir);shell_preview_search_tests(&b,dir);shell_preview_reports(&b,dir);shell_preview_schema(&b,dir);free(b.map);puts("PASS: 20 native shell states; nonoverlapping hits; draft isolation; 96-choice search, region aliases, scrolling, refreshed snapshot selection args, cancel/clear, field choice mapping, UTF-8 and buffer bounds");return 0;
 }

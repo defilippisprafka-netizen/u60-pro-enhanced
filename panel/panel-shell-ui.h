@@ -6,9 +6,10 @@
 #include "panel-menu-layout.h"
 static int sh_theme=0;
 /* Shared geometry and hit targets. Classic uses three semantic color families. */
-static const uint16_t sh_palettes[2][8]={
+static const uint16_t sh_palettes[PANEL_THEME_COUNT][8]={
  {SH_RGB(18,26,36),SH_RGB(29,39,52),SH_RGB(39,51,66),SH_RGB(240,246,250),SH_RGB(207,217,225),SH_RGB(120,222,206),SH_RGB(12,39,39),SH_RGB(255,190,108)},
- {SH_RGB(190,203,213),SH_RGB(208,217,225),SH_RGB(185,199,214),SH_RGB(53,68,83),SH_RGB(67,83,101),SH_RGB(24,77,145),SH_RGB(255,255,255),SH_RGB(153,75,10)}
+ {SH_RGB(190,203,213),SH_RGB(208,217,225),SH_RGB(185,199,214),SH_RGB(53,68,83),SH_RGB(67,83,101),SH_RGB(24,77,145),SH_RGB(255,255,255),SH_RGB(153,75,10)},
+ {SH_RGB(28,54,70),SH_RGB(42,73,89),SH_RGB(57,88,103),SH_RGB(243,248,251),SH_RGB(212,228,237),SH_RGB(173,235,220),SH_RGB(20,60,61),SH_RGB(255,207,145)}
 };
 #define SH_BG sh_palettes[sh_theme][0]
 #define SH_CARD sh_palettes[sh_theme][1]
@@ -18,6 +19,71 @@ static const uint16_t sh_palettes[2][8]={
 #define SH_CYAN sh_palettes[sh_theme][5]
 #define SH_DARK sh_palettes[sh_theme][6]
 #define SH_WARN sh_palettes[sh_theme][7]
+/* Static RGB565 glass: cache the soft background once, then composite card
+ * surfaces with integer alpha. No animation, blur pass or extra wake timer. */
+static uint16_t sh_glass_bg[320*480];
+static int sh_glass_ready;
+static uint16_t sh_mix(uint16_t a,uint16_t b,int alpha){
+ int r=(((a>>11)&31)*(255-alpha)+((b>>11)&31)*alpha+127)/255;
+ int g=(((a>>5)&63)*(255-alpha)+((b>>5)&63)*alpha+127)/255;
+ int z=((a&31)*(255-alpha)+(b&31)*alpha+127)/255;
+ return (uint16_t)((r<<11)|(g<<5)|z);
+}
+static void sh_glass_init(void){
+ if(sh_glass_ready)return;
+ static const int dither[4][4]={{0,8,2,10},{12,4,14,6},{3,11,1,9},{15,7,13,5}};
+ for(int y=0;y<480;y++)for(int x=0;x<320;x++){
+  float dx=x-305.0f,dy=y-15.0f;
+  float cool=.52f*expf(-(dx*dx/(260*260.0f)+dy*dy/(290*290.0f)));
+  dx=x-5.0f;dy=y-330.0f;
+  float sea=.48f*expf(-(dx*dx/(220*220.0f)+dy*dy/(270*270.0f)));
+  float r=27+(100-27)*cool,g=52+(126-52)*cool,z=72+(146-72)*cool;
+  r+=(71-r)*sea;g+=(126-g)*sea;z+=(134-z)*sea;
+  /* Ordered sub-pixel quantization avoids hard bands on the RGB565 LCD. */
+  float q=(dither[y&3][x&3]-7.5f)/16.0f;
+  int rr=(int)(r*31/255+q+.5f),gg=(int)(g*63/255+q+.5f),bb=(int)(z*31/255+q+.5f);
+  sh_glass_bg[y*320+x]=(uint16_t)((rr<<11)|(gg<<5)|bb);
+ }sh_glass_ready=1;
+}
+static void sh_background(struct drm_buf*b,int x0,int y0,int x1,int y1){
+ if(sh_theme!=2){fill_rect(b,x0,y0,x1,y1,SH_BG);return;}
+ sh_glass_init();if(x0<0)x0=0;if(x1>320)x1=320;if(y0<draw_clip_top)y0=draw_clip_top;if(y1>draw_clip_bottom)y1=draw_clip_bottom;
+ for(int y=y0;y<y1;y++){uint16_t*row=(uint16_t*)((uint8_t*)b->map+y*b->pitch);memcpy(row+x0,sh_glass_bg+y*320+x0,(size_t)(x1-x0)*2);}
+}
+static int sh_round_contains(int x,int y,int x0,int y0,int x1,int y1,int r){
+ if(x<x0||x>=x1||y<y0||y>=y1)return 0;
+ int cx=x<x0+r?x0+r:x>=x1-r?x1-r-1:x;
+ int cy=y<y0+r?y0+r:y>=y1-r?y1-r-1:y;
+ return (x-cx)*(x-cx)+(y-cy)*(y-cy)<=r*r;
+}
+static void sh_surface(struct drm_buf*b,int x0,int y0,int x1,int y1,int r,uint16_t c){
+ if(sh_theme!=2){fill_round(b,x0,y0,x1,y1,r,c);return;}
+ sh_glass_init();
+ for(int y=y0;y<y1;y++){
+  if(y<draw_clip_top||y>=draw_clip_bottom)continue;
+  uint16_t*row=(uint16_t*)((uint8_t*)b->map+y*b->pitch);
+  for(int x=x0;x<x1;x++){
+   if(x<0||x>=320||!sh_round_contains(x,y,x0,y0,x1,y1,r))continue;
+   uint16_t base=sh_mix(sh_glass_bg[y*320+x],c,c==SH_CYAN?225:166);
+   int edge=!sh_round_contains(x,y,x0+1,y0+1,x1-1,y1-1,r>1?r-1:0);
+   row[x]=sh_mix(base,SH_RGB(219,245,252),edge?(y<y0+r?65:32):12+(y1-y)*12/(y1-y0));
+  }
+ }
+}
+/* Tiny native strokes stay present offline and do not depend on font glyphs. */
+static void sh_icon_line(struct drm_buf*b,int x0,int y0,int x1,int y1,uint16_t c){
+ int dx=abs(x1-x0),sx=x0<x1?1:-1,dy=-abs(y1-y0),sy=y0<y1?1:-1,err=dx+dy;
+ for(;;){fill_rect(b,x0,y0,x0+2,y0+2,c);if(x0==x1&&y0==y1)break;int e=2*err;if(e>=dy){err+=dy;x0+=sx;}if(e<=dx){err+=dx;y0+=sy;}}
+}
+static void sh_nav_icon(struct drm_buf*b,int type,int x,int y,uint16_t c){
+ #define IL(a,d,e,f) sh_icon_line(b,x+(a),y+(d),x+(e),y+(f),c)
+ if(type==0){IL(0,7,8,0);IL(8,0,16,7);IL(3,6,3,16);IL(3,16,13,16);IL(13,16,13,6);IL(7,16,7,11);IL(7,11,10,11);}
+ else if(type==1){IL(0,4,4,1);IL(4,1,12,1);IL(12,1,16,4);IL(3,8,6,6);IL(6,6,10,6);IL(10,6,13,8);IL(6,12,8,10);IL(8,10,10,12);fill_circle(b,x+9,y+16,1,c);}
+ else if(type==2){IL(8,0,1,3);IL(1,3,2,10);IL(2,10,8,17);IL(8,17,14,10);IL(14,10,15,3);IL(15,3,8,0);IL(5,8,8,11);IL(8,11,12,6);}
+ else if(type==3){IL(8,5,8,9);IL(2,9,14,9);IL(2,9,2,12);IL(14,9,14,12);fill_round_border(b,x+5,y,x+12,y+6,1,SH_CARD,c);fill_round_border(b,x-1,y+12,x+6,y+18,1,SH_CARD,c);fill_round_border(b,x+11,y+12,x+18,y+18,1,SH_CARD,c);}
+ else {IL(0,3,16,3);IL(0,9,16,9);IL(0,15,16,15);fill_circle(b,x+5,y+4,2,c);fill_circle(b,x+12,y+10,2,c);fill_circle(b,x+6,y+16,2,c);}
+ #undef IL
+}
 enum { SH_BACK=2000,SH_REFRESH,SH_PREV,SH_NEXT,SH_CANCEL,SH_APPLY,SH_CONFIRM,
  SH_KEYMODE,SH_SHIFT,SH_DELETE,SH_SPACE,SH_DONE,SH_REVEAL,SH_FIELD_PREV,SH_FIELD_NEXT,
  SH_POWER_OFF,SH_POWER_REBOOT,SH_FACTORY,SH_SEARCH=2031,SH_SEARCH_CLEAR,SH_STATUS=2030,SH_TAB=2020,SH_SECTION=2040,
@@ -55,7 +121,7 @@ static uint16_t sh_category_ink(int group){
 }
 static void sh_text(struct drm_buf*b,int x,int y,const char*t,int sz,uint16_t col,int w){draw_text_clip(b,x,y,t,sz<14?14:sz,col,w);}
 static void sh_button(struct drm_buf*b,struct app*a,int x,int y,int w,int h,const char*t,int id,int active){
- fill_round(b,x,y,x+w,y+h,10,active?SH_CYAN:SH_RAISED);draw_text_center(b,x,x+w,y+(h-15)/2,t,15,active?SH_DARK:SH_TEXT);hit_add(a,x,y,x+w,y+h,id);
+ sh_surface(b,x,y,x+w,y+h,10,active?SH_CYAN:SH_RAISED);draw_text_center(b,x,x+w,y+(h-15)/2,t,15,active?SH_DARK:SH_TEXT);hit_add(a,x,y,x+w,y+h,id);
 }
 static void sh_wrap(struct drm_buf*b,int x,int y,const char*t,int maxw,int lines,uint16_t col){
  /* UTF-8 boundaries, real glyph width; long descriptions remain visible. */
@@ -137,7 +203,7 @@ static void sh_scroll_end(struct drm_buf*b,struct app*a){
  fill_round(b,314,y,317,y+len,1,SH_MUTED);}
 }
 static void sh_row(struct drm_buf*b,struct app*a,int y,const char*title,const char*value,int id,int enabled,int group){
- fill_round(b,12,y,308,y+57,11,sh_category_card(group));
+ sh_surface(b,12,y,308,y+57,11,sh_category_card(group));
  int title_w=text_width(title,16),value_w=text_width(value,18);
  if(title_w+value_w+20<=249){sh_text(b,24,y+19,title,16,SH_MUTED,title_w+2);sh_text(b,273-value_w,y+18,value,18,enabled?SH_TEXT:SH_MUTED,value_w+2);}
  else {sh_text(b,24,y+8,title,14,SH_MUTED,255);sh_text(b,24,y+30,value,17,enabled?SH_TEXT:SH_MUTED,251);}
@@ -145,7 +211,7 @@ static void sh_row(struct drm_buf*b,struct app*a,int y,const char*title,const ch
 }
 static void sh_choice_row(struct drm_buf*b,struct app*a,int y,cJSON*c,int id){
  int enabled=!cJSON_IsFalse(sh_get(c,"enabled"));const char*label=sh_str(c,"label","选项"),*description=sh_str(c,"description","");
- fill_round(b,12,y,308,y+57,14,sh_category_card(sh_current_group(a)));
+ sh_surface(b,12,y,308,y+57,14,sh_category_card(sh_current_group(a)));
  if(text_width(label,15)>249)sh_wrap(b,24,y+7,label,249,2,enabled?SH_TEXT:SH_MUTED);
  else {sh_text(b,24,y+(*description?8:19),label,15,enabled?SH_TEXT:SH_MUTED,249);if(*description)sh_text(b,24,y+32,description,14,SH_MUTED,249);}
  if(enabled){sh_text(b,285,y+20,"›",20,SH_CYAN,16);hit_add(a,12,y,308,y+57,id);}
@@ -180,7 +246,7 @@ static int sh_signal_bars(struct app*a){
 }
 static void sh_statusbar(struct drm_buf*b,struct app*a,time_t now){
  cJSON*d=sh_get(a->shell.snapshot,"data");char clock_text[16],battery[16];int bat=sh_status_value(sh_get(d,"battery"),100),bars=sh_signal_bars(a);
- fill_rect(b,144,0,320,44,SH_BG);sh_clock_text(now,clock_text,sizeof(clock_text));
+ sh_background(b,144,0,320,44);sh_clock_text(now,clock_text,sizeof(clock_text));
  /* Fixed digit cells keep HH:MM and the colon stationary across every minute. */
  static const int clock_x[]={144,156,168,174,186},clock_w[]={12,12,6,12,12};
  for(int i=0;i<5;i++){char digit[]={clock_text[i],0};draw_text_center(b,clock_x[i],clock_x[i]+clock_w[i],14,digit,20,SH_TEXT);}
@@ -214,24 +280,30 @@ static void sh_home(struct drm_buf*b,struct app*a){
  struct panel_shell*s=&a->shell;cJSON*d=sh_get(s->snapshot,"data"),*cl=sh_get(d,"clash");char tmp[160],down[40],up[40],today[40],month[40],quota[40],used[40];
  if(!strcmp(sh_str(d,"physical_iface",""),"u60sta"))snprintf(tmp,sizeof(tmp),"%s",sh_str(d,"wifi_status","Wi-Fi 上游中继"));else snprintf(tmp,sizeof(tmp),"%s · %s",sh_str(d,"operator",a->operator[0]?a->operator:"运营商未知"),sh_str(d,"network",a->net_type[0]?a->net_type:"网络未知"));sh_text(b,16,51,tmp,15,SH_CYAN,287);
  const char*profile=sh_str(d,"network_profile","");const char*outlet=!strcmp(profile,"clash")?"Clash":!strcmp(profile,"tailscale")?"Tailscale":!strcmp(profile,"direct")?"直连":"未确认";snprintf(tmp,sizeof(tmp),"出口 %s · %s · %s",outlet,sh_str(d,"band",a->band[0]?a->band:"频段未知"),sh_str(d,"physical_iface","接口未知"));sh_text(b,16,74,tmp,14,SH_MUTED,287);hit_add(a,12,45,308,91,SH_SECTION+1);
- fill_round(b,12,96,308,167,13,sh_category_card(SH_NETWORK_COLOR));sh_metric(d,"download_bps",down,sizeof(down),1);sh_metric(d,"upload_bps",up,sizeof(up),1);
+ sh_surface(b,12,96,308,167,13,sh_category_card(SH_NETWORK_COLOR));sh_metric(d,"download_bps",down,sizeof(down),1);sh_metric(d,"upload_bps",up,sizeof(up),1);
  sh_text(b,24,105,"↓ 下载",14,SH_MUTED,130);sh_text(b,170,105,"↑ 上传",14,SH_MUTED,126);sh_text(b,24,128,down,24,SH_TEXT,135);sh_text(b,170,128,up,24,SH_TEXT,126);
- sh_metric(d,"today_bytes",today,sizeof(today),0);sh_metric(d,"month_bytes",month,sizeof(month),0);fill_round(b,12,174,308,230,11,sh_category_card(SH_DEVICE_COLOR));
+ sh_metric(d,"today_bytes",today,sizeof(today),0);sh_metric(d,"month_bytes",month,sizeof(month),0);sh_surface(b,12,174,308,230,11,sh_category_card(SH_DEVICE_COLOR));
  sh_text(b,24,184,"蜂窝流量",14,SH_MUTED,100);cJSON*usage=sh_get(d,"usage");const char*warning_state=sh_str(usage,"warning","");int warning=!strcmp(warning_state,"threshold")||!strcmp(warning_state,"exceeded");sh_text(b,170,184,warning?"套餐用量预警 ›":"套餐台账 ›",14,warning?SH_CYAN:SH_MUTED,126);snprintf(tmp,sizeof(tmp),"今日 %s",today);sh_text(b,24,206,tmp,17,SH_TEXT,138);snprintf(tmp,sizeof(tmp),"本月 %s",month);sh_text(b,170,206,tmp,17,SH_TEXT,126);hit_add(a,12,174,308,230,SH_SECTION+24);
- fill_round(b,12,237,308,326,12,sh_category_card(SH_SERVICE_COLOR));snprintf(tmp,sizeof(tmp),"Clash · %s",mode_label(sh_str(cl,"mode",a->mode)));sh_text(b,24,247,tmp,16,sh_category_ink(SH_SERVICE_COLOR),181);
+ sh_surface(b,12,237,308,326,12,sh_category_card(SH_SERVICE_COLOR));snprintf(tmp,sizeof(tmp),"Clash · %s",mode_label(sh_str(cl,"mode",a->mode)));sh_text(b,24,247,tmp,16,sh_category_ink(SH_SERVICE_COLOR),181);
  char connections[24];sh_value(sh_get(cl,"connections"),connections,sizeof(connections));snprintf(tmp,sizeof(tmp),"%s 连接",connections);sh_text(b,220,248,tmp,15,SH_MUTED,78);
  sh_text(b,24,272,sh_str(cl,"node",a->node[0]?a->node:"当前节点待确认"),17,SH_TEXT,268);
  sh_metric(cl,"quota_remaining",quota,sizeof(quota),0);snprintf(tmp,sizeof(tmp),"剩余 %s",quota);sh_text(b,24,302,tmp,15,SH_TEXT,139);
  cJSON*u=sh_get(cl,"upload"),*v=sh_get(cl,"download");if(cJSON_IsNumber(u)&&cJSON_IsNumber(v))sh_units(u->valuedouble+v->valuedouble,used,sizeof(used),0);else snprintf(used,sizeof(used),"—");snprintf(tmp,sizeof(tmp),"累计 %s",used);sh_text(b,170,302,tmp,15,SH_MUTED,126);hit_add(a,12,237,308,326,SH_SECTION+22);
  const char*labels[]={"Wi-Fi","USB","Clash","组网"};const char*keys[]={"wifi_status","usb_status","clash_status","tailscale_status"};const char*fallback[]={"未知","未知","读取中","未知"};
- for(int i=0;i<4;i++){int x=12+(i%2)*151,y=332+(i/2)*29;fill_round(b,x,y,x+145,y+25,7,sh_category_card(i<2?SH_NETWORK_COLOR:SH_SERVICE_COLOR));sh_text(b,x+8,y+5,labels[i],15,SH_MUTED,46);sh_text(b,x+59,y+5,i==2?sh_clash_status(d):sh_str(d,keys[i],fallback[i]),15,SH_TEXT,80);hit_add(a,x,y,x+145,y+25,SH_SECTION+20+i);}
+ for(int i=0;i<4;i++){int x=12+(i%2)*151,y=332+(i/2)*29;sh_surface(b,x,y,x+145,y+25,7,sh_category_card(i<2?SH_NETWORK_COLOR:SH_SERVICE_COLOR));sh_text(b,x+8,y+5,labels[i],15,SH_MUTED,46);sh_text(b,x+59,y+5,i==2?sh_clash_status(d):sh_str(d,keys[i],fallback[i]),15,SH_TEXT,80);hit_add(a,x,y,x+145,y+25,SH_SECTION+20+i);}
  char cpu[24],mem[24],temp[24],clients[24];cJSON*cp=sh_get(d,"cpu_percent"),*mp=sh_get(d,"memory_percent");if(cJSON_IsNumber(cp))snprintf(cpu,sizeof(cpu),"%.0f",cp->valuedouble);else snprintf(cpu,sizeof(cpu),"—");if(cJSON_IsNumber(mp))snprintf(mem,sizeof(mem),"%.0f",mp->valuedouble);else snprintf(mem,sizeof(mem),"—");sh_value(sh_get(d,"temperature"),temp,sizeof(temp));sh_value(sh_get(d,"clients"),clients,sizeof(clients));snprintf(tmp,sizeof(tmp),"CPU %s%%  内存 %s%%  %s°C",cpu,mem,temp);sh_text(b,16,391,tmp,16,SH_MUTED,288);
  cJSON*uptime=sh_get(d,"uptime_seconds");if(cJSON_IsNumber(uptime))snprintf(tmp,sizeof(tmp),"运行 %dh %dm · %s 台在线",uptime->valueint/3600,(uptime->valueint/60)%60,clients);else snprintf(tmp,sizeof(tmp),"运行时间 — · %s 台在线",clients);sh_text(b,16,412,tmp,16,SH_MUTED,288);
 }
 static void sh_navigation(struct drm_buf*b,struct app*a){
- static const char*t[]={"总览","网络","Clash","组网","设置"};int i;
- fill_rect(b,0,432,320,480,SH_BG);fill_rect(b,0,432,320,433,SH_RAISED);
- for(i=0;i<5;i++){int x=i*64;int group=i==1?SH_NETWORK_COLOR:(i==2||i==3)?SH_SERVICE_COLOR:SH_DEVICE_COLOR;if(a->shell.tab==i)fill_round(b,x+5,439,x+59,474,10,sh_theme?SH_RAISED:sh_category_card(group));draw_text_center(b,x,x+64,450,t[i],14,a->shell.tab==i?sh_category_ink(group):SH_MUTED);hit_add(a,x,433,x+64,480,SH_TAB+i);}
+ static const char*t[]={"总览","网络","Clash","组网","设置"};
+ sh_background(b,0,432,320,480);fill_rect(b,0,432,320,433,SH_RAISED);
+ for(int i=0;i<5;i++){
+  int x=i*64,group=i==1?SH_NETWORK_COLOR:(i==2||i==3)?SH_SERVICE_COLOR:SH_DEVICE_COLOR;
+  int selected=a->shell.tab==i;uint16_t ink=selected?sh_category_ink(group):SH_MUTED;
+  if(selected)sh_surface(b,x+5,436,x+59,478,10,sh_theme?SH_RAISED:sh_category_card(group));
+  sh_nav_icon(b,i,x+23,439,ink);draw_text_center(b,x,x+64,461,t[i],14,ink);
+  hit_add(a,x,433,x+64,480,SH_TAB+i);
+ }
 }
 static int sh_menu_count(struct app*a){return a->shell.tab==1?5:(int)(sizeof(sh_settings_sections)/sizeof(sh_settings_sections[0]))+1;}
 static void sh_section_list(struct drm_buf*b,struct app*a){
@@ -283,7 +355,7 @@ static const char *sh_keyboard(struct panel_shell*s){
 }
 static void sh_editor(struct drm_buf*b,struct app*a){
  struct panel_shell*s=&a->shell;int search=s->editor==2;cJSON*f=search?NULL:cJSON_GetArrayItem(sh_get(s->draft,"fields"),s->field);const char*kind=sh_str(f,"kind","text");const char*input=search?s->search_edit:s->values[s->field];size_t capacity=search?SHELL_SEARCH_CAP:SHELL_VALUE_CAP;char value[SHELL_VALUE_CAP],key[2]={0,0};const char*keys=sh_keyboard(s);int i,n=(int)strlen(keys),password=!search&&!strcmp(kind,"password");
- hit_reset(a);fill_rect(b,0,0,320,480,SH_BG);sh_text(b,16,14,search?"搜索选项":sh_str(f,"label","编辑"),19,SH_TEXT,search?151:210);if(search)sh_button(b,a,180,6,60,36,"取消",SH_CANCEL,0);sh_button(b,a,246,6,62,36,"完成",SH_DONE,1);
+ hit_reset(a);sh_background(b,0,0,320,480);sh_text(b,16,14,search?"搜索选项":sh_str(f,"label","编辑"),19,SH_TEXT,search?151:210);if(search)sh_button(b,a,180,6,60,36,"取消",SH_CANCEL,0);sh_button(b,a,246,6,62,36,"完成",SH_DONE,1);
  sh_text(b,16,57,search?"如 HK、JP、US、01 · 可用空格组合":"输入英文、数字或符号",14,SH_MUTED,288);
  snprintf(value,sizeof(value),"%s",input);if(password&&!s->reveal)for(i=0;value[i];i++)value[i]='*';
  fill_round(b,12,83,308,153,12,SH_CARD);
@@ -299,7 +371,7 @@ static void sh_editor(struct drm_buf*b,struct app*a){
 }
 static void sh_form(struct drm_buf*b,struct app*a){
  struct panel_shell*s=&a->shell;int i;char val[SHELL_VALUE_CAP];cJSON*fs=sh_get(s->draft,"fields");
- hit_reset(a);fill_rect(b,0,0,320,480,SH_BG);sh_text(b,16,16,sh_str(s->draft,"label","修改设置"),20,SH_TEXT,285);sh_text(b,16,50,"轻点输入框编辑 · 保存后应用",14,SH_MUTED,285);
+ hit_reset(a);sh_background(b,0,0,320,480);sh_text(b,16,16,sh_str(s->draft,"label","修改设置"),20,SH_TEXT,285);sh_text(b,16,50,"轻点输入框编辑 · 保存后应用",14,SH_MUTED,285);
  sh_scroll_begin(a,&s->field_page,s->nfields*63+8,76,396);
  for(i=0;i<s->nfields;i++){int k=i;int y=80+i*63-s->field_page;if(y+57<=76||y>=396)continue;cJSON*f=cJSON_GetArrayItem(fs,k);snprintf(val,sizeof(val),"%s",s->values[k][0]?s->values[k]:"轻点输入");if(!strcmp(sh_str(f,"kind","text"),"choice")){cJSON*c;cJSON_ArrayForEach(c,sh_get(f,"choices")){char cv[SHELL_VALUE_CAP];sh_value(sh_get(c,"value"),cv,sizeof(cv));if(!strcmp(cv,s->values[k])){snprintf(val,sizeof(val),"%s",sh_str(c,"label",cv));break;}}}if(!strcmp(sh_str(f,"kind","text"),"password")&&s->values[k][0])snprintf(val,sizeof(val),"••••••••");sh_row(b,a,y,sh_str(f,"label","字段"),val,SH_FIELD+i,1,sh_current_group(a));}
  sh_scroll_end(b,a);
@@ -311,7 +383,7 @@ static void sh_modal(struct drm_buf*b,struct app*a){
  s->scroll_offset=NULL;
  if(s->editor){sh_editor(b,a);return;}if(s->modal==4){sh_form(b,a);return;}
  if(s->modal==6){
-  hit_reset(a);fill_rect(b,0,0,320,480,SH_BG);sh_text(b,16,15,sh_str(s->draft,"label","结果"),20,SH_TEXT,288);
+  hit_reset(a);sh_background(b,0,0,320,480);sh_text(b,16,15,sh_str(s->draft,"label","结果"),20,SH_TEXT,288);
   int total=cJSON_GetArraySize(s->report_lines);sh_scroll_begin(a,&s->report_page,total*23+8,52,424);
   for(int j=0;j<total;j++){int y=56+j*23-s->report_page;if(y+22<=52||y>=424)continue;cJSON*l=cJSON_GetArrayItem(s->report_lines,j);sh_text(b,20,y,cJSON_IsString(l)?l->valuestring:"",16,SH_TEXT,276);}
   sh_scroll_end(b,a);sh_button(b,a,12,432,296,40,"返回",SH_CANCEL,0);return;
@@ -331,11 +403,11 @@ static void sh_modal(struct drm_buf*b,struct app*a){
 }
 static void shell_render(struct drm_buf*b,struct app*a){
 #ifndef PANEL_PREVIEW
- static int theme_loaded=0;if(!theme_loaded){sh_theme=panel_theme_load();theme_loaded=1;logline("screen theme loaded=%s",sh_theme?"paper":"classic");}
+ static int theme_loaded=0;if(!theme_loaded){sh_theme=panel_theme_load();theme_loaded=1;logline("screen theme loaded=%s",panel_theme_key(sh_theme));}
 #endif
  struct panel_shell*s=&a->shell;const char*titles[]={"U60 Pro","网络","Clash","Tailscale","设置"};
  s->scroll_offset=NULL;draw_clip_top=0;draw_clip_bottom=H;
- if(s->tab<0||s->tab>4)s->tab=0;fill_rect(b,0,0,320,480,SH_BG);hit_reset(a);
+ if(s->tab<0||s->tab>4)s->tab=0;sh_background(b,0,0,320,480);hit_reset(a);
  const char*title=s->subpage?sh_str(sh_section(a,s->section),"title",s->section):titles[s->tab];
  int back=s->subpage&&s->tab!=2&&s->tab!=3;
  sh_text(b,16,13,back?"‹":"",21,SH_CYAN,20);sh_text(b,back?38:16,14,title,19,SH_TEXT,back?100:122);if(back)hit_add(a,0,0,140,44,SH_BACK);
@@ -349,7 +421,7 @@ static void shell_render(struct drm_buf*b,struct app*a){
   int receipt_hit=0;for(int h=0;h<a->nhits;h++)if(a->hits[h].id==SH_BACK){a->hits[h].id=SH_STATUS;receipt_hit=1;}if(!receipt_hit)hit_add(a,0,0,140,44,SH_STATUS);
  }
  if(s->modal||s->editor)sh_modal(b,a);
- if(s->power_open){s->scroll_offset=NULL;hit_reset(a);fill_rect(b,0,0,320,480,SH_BG);sh_text(b,24,70,"电源",25,SH_TEXT,272);sh_text(b,24,110,"选择设备操作",14,SH_MUTED,272);sh_button(b,a,24,169,272,58,"关闭设备",SH_POWER_OFF,0);sh_button(b,a,24,243,272,58,"重新启动",SH_POWER_REBOOT,0);sh_button(b,a,24,337,272,54,"取消",SH_CANCEL,1);}
+ if(s->power_open){s->scroll_offset=NULL;hit_reset(a);sh_background(b,0,0,320,480);sh_text(b,24,70,"电源",25,SH_TEXT,272);sh_text(b,24,110,"选择设备操作",14,SH_MUTED,272);sh_button(b,a,24,169,272,58,"关闭设备",SH_POWER_OFF,0);sh_button(b,a,24,243,272,58,"重新启动",SH_POWER_REBOOT,0);sh_button(b,a,24,337,272,54,"取消",SH_CANCEL,1);}
 }
 static void sh_save_form(struct app*a){
  struct panel_shell*s=&a->shell;cJSON*fs=sh_get(s->draft,"fields"),*base=sh_get(s->draft,"args"),*args=base?cJSON_Duplicate(base,1):cJSON_CreateObject();int i;
